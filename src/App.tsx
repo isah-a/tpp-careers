@@ -1,0 +1,13 @@
+import { Route, Routes } from 'react-router-dom'
+import { DashboardLayout } from './components/DashboardLayout'
+import { ProtectedRoute } from './components/ProtectedRoute'
+import { PublicLayout } from './components/PublicLayout'
+import { ApplicantsPage } from './pages/ApplicantsPage'
+import { DashboardPage } from './pages/DashboardPage'
+import { HomePage } from './pages/HomePage'
+import { JobPage } from './pages/JobPage'
+import { LoginPage } from './pages/LoginPage'
+import { SuccessPage } from './pages/SuccessPage'
+import { VacanciesPage } from './pages/VacanciesPage'
+import { VacancyEditorPage } from './pages/VacancyEditorPage'
+export default function App(){return <Routes><Route element={<PublicLayout/>}><Route path="/" element={<HomePage/>}/><Route path="/jobs/:slug" element={<JobPage/>}/><Route path="/application-success" element={<SuccessPage/>}/></Route><Route path="/login" element={<LoginPage/>}/><Route path="/dashboard" element={<ProtectedRoute><DashboardLayout/></ProtectedRoute>}><Route index element={<DashboardPage/>}/><Route path="vacancies" element={<VacanciesPage/>}/><Route path="vacancies/new" element={<VacancyEditorPage/>}/><Route path="vacancies/:id" element={<VacancyEditorPage/>}/><Route path="vacancies/:id/applicants" element={<ApplicantsPage/>}/></Route><Route path="*" element={<div className="grid min-h-screen place-items-center"><a href="/" className="btn-primary">Return home</a></div>}/></Routes>}

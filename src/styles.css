@@ -1,0 +1,10 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap');
+@tailwind base; @tailwind components; @tailwind utilities;
+@layer base { body { @apply m-0 bg-canvas font-sans text-ink antialiased; } * { @apply box-border; } button, a { @apply transition; } :focus-visible { @apply outline-none ring-2 ring-violet ring-offset-2; } }
+@layer components {
+  .card { @apply rounded-2xl border border-line bg-white shadow-card; }
+  .field { @apply w-full rounded-lg border border-line bg-white px-3.5 py-3 text-sm outline-none placeholder:text-slate-400 focus:border-violet focus:ring-2 focus:ring-violet/15; }
+  .label { @apply mb-1.5 block text-xs font-bold text-slate-700; }
+  .btn-primary { @apply inline-flex items-center justify-center gap-2 rounded-lg bg-violet px-5 py-3 text-sm font-bold text-white hover:bg-[#4A00C2] disabled:cursor-not-allowed disabled:opacity-50; }
+  .btn-ghost { @apply inline-flex items-center justify-center gap-2 rounded-lg border border-line bg-white px-4 py-2.5 text-sm font-semibold text-muted hover:bg-panel; }
+}
