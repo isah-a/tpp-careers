@@ -1,11 +1,14 @@
-import { BriefcaseBusiness, LayoutDashboard, LogOut, Plus } from 'lucide-react'
+import { BriefcaseBusiness, Columns3, Files, LayoutDashboard, LogOut, Plus, Users } from 'lucide-react'
 import { NavLink, Outlet } from 'react-router-dom'
 import { Brand } from './Brand'
 import { useAuth } from '../context/AuthContext'
 
 const links = [
   {to:'/dashboard',label:'Overview',icon:LayoutDashboard,end:true},
+  {to:'/dashboard/pipeline',label:'Pipeline',icon:Columns3,end:false},
   {to:'/dashboard/vacancies',label:'Vacancies',icon:BriefcaseBusiness,end:false},
+  {to:'/dashboard/templates',label:'Templates',icon:Files,end:false},
+  {to:'/dashboard/candidates',label:'Candidates',icon:Users,end:false},
 ]
 
 export function DashboardLayout() {
@@ -19,7 +22,7 @@ export function DashboardLayout() {
     <div className="min-w-0 flex-1">
       <header className="sticky top-0 z-20 border-b border-line bg-white/95 backdrop-blur">
         <div className="flex min-h-16 items-center justify-between px-4 md:px-8"><div className="md:hidden"><Brand/></div><p className="hidden text-sm font-semibold text-muted md:block">Talent operations</p><NavLink to="/dashboard/vacancies/new" className="btn-primary min-h-10 px-4"><Plus size={16}/><span className="hidden sm:inline">Create vacancy</span><span className="sm:hidden">New</span></NavLink></div>
-        <nav className="flex border-t border-line px-3 md:hidden">{links.map(({to,label,icon:Icon,end})=><NavLink key={label} to={to} end={end} className={({isActive})=>`flex flex-1 items-center justify-center gap-2 border-b-2 px-3 py-3 text-sm font-semibold ${isActive?'border-violet text-violet':'border-transparent text-muted'}`}><Icon size={17}/>{label}</NavLink>)}</nav>
+        <nav className="flex overflow-x-auto border-t border-line px-3 md:hidden">{links.map(({to,label,icon:Icon,end})=><NavLink key={label} to={to} end={end} className={({isActive})=>`flex shrink-0 items-center justify-center gap-2 border-b-2 px-3 py-3 text-sm font-semibold ${isActive?'border-violet text-violet':'border-transparent text-muted'}`}><Icon size={17}/>{label}</NavLink>)}</nav>
       </header>
       <main className="p-4 pb-10 sm:p-6 md:p-8 lg:p-10"><Outlet/></main>
     </div>

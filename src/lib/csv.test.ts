@@ -6,7 +6,7 @@ describe('CSV export', () => {
     expect(safeCsvCell('=IMPORTXML("x")')).toBe('"\'=IMPORTXML(""x"")"')
   })
   it('includes screening answers without CV URLs', () => {
-    const csv = applicationsToCsv([{id:'1',full_name:'Ada',email:'ada@example.com',phone:'1234567',created_at:'2026-01-01',cv_path:'private/x.pdf',answers:{q1:'Yes'}}],[{id:'q1',label:'Eligible?',type:'yes_no',required:true,options:[],sort_order:0}])
+    const csv = applicationsToCsv([{id:'1',vacancy_id:'v1',stage:'screening',full_name:'Ada',email:'ada@example.com',phone:'1234567',created_at:'2026-01-01',cv_path:'private/x.pdf',answers:{q1:'Yes'}}],[{id:'q1',label:'Eligible?',type:'yes_no',required:true,options:[],sort_order:0}])
     expect(csv).toContain('Eligible?')
     expect(csv).toContain('Yes')
     expect(csv).not.toContain('private/x.pdf')

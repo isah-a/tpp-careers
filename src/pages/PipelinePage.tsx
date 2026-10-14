@@ -1,0 +1,16 @@
+import { Search } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { PIPELINE_STAGES, initials } from '../lib/recruitment'
+import { supabase } from '../lib/supabase'
+import type { Application, ApplicationStage } from '../types'
+
+export function PipelinePage(){
+  const [rows,setRows]=useState<Application[]>([]),[query,setQuery]=useState(''),[loading,setLoading]=useState(true),[error,setError]=useState('')
+  useEffect(()=>{void supabase.from('applications').select('*,vacancies(id,title,slug)').order('stage_updated_at',{ascending:false}).then(({data,error})=>{setRows((data||[]) as unknown as Application[]);setError(error?.message||'');setLoading(false)})},[])
+  const shown=useMemo(()=>rows.filter(row=>`${row.full_name} ${row.vacancies?.title||''}`.toLowerCase().includes(query.toLowerCase())),[rows,query])
+  async function move(id:string,to_stage:ApplicationStage){const {error}=await supabase.rpc('transition_application_stage',{p_application_id:id,p_to_stage:to_stage,p_note:null});if(error){setError(error.message);return}setRows(items=>items.map(row=>row.id===id?{...row,stage:to_stage}:row))}
+  return <div className="workspace"><p className="eyebrow">Recruitment pipeline</p><h1 className="page-title">Candidate pipeline</h1><p className="meta mt-2">Move applicants through the hiring process. Every change is recorded.</p><label className="relative mt-6 block max-w-md"><Search className="pointer-events-none absolute left-3.5 top-3.5 text-slate-400" size={17}/><input aria-label="Search pipeline" className="field pl-10" placeholder="Search candidate or role" value={query} onChange={e=>setQuery(e.target.value)}/></label>{error&&<p role="alert" className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+    {loading?<p className="mt-6 card p-10 text-center text-muted">Loading pipeline…</p>:<div className="mt-6 grid gap-4 overflow-x-auto pb-3 lg:grid-cols-3 2xl:grid-cols-6">{PIPELINE_STAGES.map(column=>{const items=shown.filter(row=>row.stage===column.value);return <section key={column.value} className="min-w-[260px] rounded-xl bg-[#EFEDF2] p-3"><div className="flex items-center justify-between px-1 pb-3"><h2 className="text-sm font-bold">{column.label}</h2><span className="rounded-full bg-white px-2 py-0.5 text-xs font-bold text-muted">{items.length}</span></div><div className="space-y-3">{items.map(row=><article key={row.id} className="card p-4"><Link to={`/dashboard/candidates/${row.id}`} className="flex items-center gap-3"><span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-violet text-xs font-bold text-white">{initials(row.full_name)}</span><span className="min-w-0"><span className="block truncate text-sm font-semibold">{row.full_name}</span><span className="block truncate text-xs text-muted">{row.vacancies?.title}</span></span></Link><select aria-label={`Move ${row.full_name}`} className="field mt-4 py-2 text-xs" value={row.stage} onChange={e=>void move(row.id,e.target.value as ApplicationStage)}>{PIPELINE_STAGES.map(x=><option key={x.value} value={x.value}>{x.label}</option>)}</select></article>)}{!items.length&&<p className="rounded-lg border border-dashed border-slate-300 p-5 text-center text-xs text-muted">No candidates</p>}</div></section>})}</div>}
+  </div>
+}
