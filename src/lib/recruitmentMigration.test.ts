@@ -11,6 +11,11 @@ describe('recruitment management migration security',()=>{
     expect(sql).toMatch(/recruiter_notes_read[\s\S]*public\.is_recruiter\(\)/)
     expect(sql).toMatch(/revoke all on public\.job_templates[\s\S]*from public, anon, authenticated/)
   })
+  it('limits template mutation to the creating recruiter',()=>{
+    expect(sql).toMatch(/recruiter_templates_update_own[\s\S]*using \(public\.is_recruiter\(\) and created_by = auth\.uid\(\)\)/)
+    expect(sql).toMatch(/recruiter_templates_delete_own[\s\S]*created_by = auth\.uid\(\)/)
+    expect(sql).not.toMatch(/recruiter_templates_all/)
+  })
   it('records stage changes through the recruiter-only function',()=>{
     expect(sql).toMatch(/security definer[\s\S]*if v_actor is null or not public\.is_recruiter\(\)/)
     expect(sql).toMatch(/insert into public\.application_stage_history/)

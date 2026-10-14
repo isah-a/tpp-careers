@@ -12,7 +12,7 @@ export interface Vacancy {
   status: VacancyStatus; created_at: string; updated_at?: string; application_count?: number
   screening_questions?: ScreeningQuestion[]
 }
-export interface Recruiter { user_id: string; email: string; full_name?: string | null }
+export interface Recruiter { user_id: string; display_name: string }
 export interface Application {
   id: string; vacancy_id: string; full_name: string; email: string; phone: string
   answers: Record<string,string>; created_at: string; cv_path: string; stage: ApplicationStage

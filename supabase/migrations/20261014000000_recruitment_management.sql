@@ -92,8 +92,14 @@ alter table public.application_reviews enable row level security;
 alter table public.application_notes enable row level security;
 alter table public.application_stage_history enable row level security;
 
-create policy recruiter_templates_all on public.job_templates for all to authenticated
-  using (public.is_recruiter()) with check (public.is_recruiter() and created_by = auth.uid());
+create policy recruiter_templates_read on public.job_templates for select to authenticated using (public.is_recruiter());
+create policy recruiter_templates_insert_own on public.job_templates for insert to authenticated
+  with check (public.is_recruiter() and created_by = auth.uid());
+create policy recruiter_templates_update_own on public.job_templates for update to authenticated
+  using (public.is_recruiter() and created_by = auth.uid())
+  with check (public.is_recruiter() and created_by = auth.uid());
+create policy recruiter_templates_delete_own on public.job_templates for delete to authenticated
+  using (public.is_recruiter() and created_by = auth.uid());
 create policy recruiter_reviews_read on public.application_reviews for select to authenticated using (public.is_recruiter());
 create policy recruiter_reviews_insert_own on public.application_reviews for insert to authenticated
   with check (public.is_recruiter() and reviewer_id = auth.uid());
