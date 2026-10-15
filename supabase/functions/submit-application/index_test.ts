@@ -1,5 +1,5 @@
 import { assertEquals } from 'jsr:@std/assert@1'
-import { aiReviewConsentFrom, corsHeaders, fixedWindowRetryAfter, isStructurallyValidDocx, rateLimitArguments, validateAnswers, zipEntryNames } from './index.ts'
+import { aiReviewConsentFrom, corsHeaders, fixedWindowRetryAfter, isStructurallyValidDocx, rateLimitArguments, trustedClientIp, validateAnswers, zipEntryNames } from './index.ts'
 
 Deno.test('CORS only reflects configured origins', () => {
   const allowed = new Set(['http://localhost:5173', 'https://staging.example.com'])
@@ -55,6 +55,18 @@ Deno.test('AI review consent is optional and unchecked by default', () => {
   assertEquals(aiReviewConsentFrom(unchecked), false)
   unchecked.set('ai_review_consent', 'on')
   assertEquals(aiReviewConsentFrom(unchecked), true)
+})
+
+Deno.test('local IP fallback is explicit and restricted to local origins', () => {
+  const previous=Deno.env.get('ALLOW_LOCAL_IP_FALLBACK')
+  try {
+    Deno.env.delete('ALLOW_LOCAL_IP_FALLBACK')
+    assertEquals(trustedClientIp(new Request('http://local.test',{headers:{origin:'http://localhost:5173'}})),null)
+    Deno.env.set('ALLOW_LOCAL_IP_FALLBACK','true')
+    assertEquals(trustedClientIp(new Request('http://local.test',{headers:{origin:'http://localhost:5173'}})),'127.0.0.1')
+    assertEquals(trustedClientIp(new Request('http://local.test',{headers:{origin:'https://careers.example.com'}})),null)
+    assertEquals(trustedClientIp(new Request('http://local.test',{headers:{origin:'https://careers.example.com','cf-connecting-ip':'203.0.113.9'}})),'203.0.113.9')
+  } finally { previous===undefined?Deno.env.delete('ALLOW_LOCAL_IP_FALLBACK'):Deno.env.set('ALLOW_LOCAL_IP_FALLBACK',previous) }
 })
 
 Deno.test('pending migration protects historical exemptions and exposes active consent state', async () => {

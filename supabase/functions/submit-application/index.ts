@@ -17,6 +17,20 @@ function configuredOrigins() {
   return new Set((Deno.env.get('ALLOWED_FRONTEND_ORIGINS') || '').split(',').map(value => value.trim()).filter(Boolean))
 }
 
+export function trustedClientIp(req: Request) {
+  const cloudflareIp = req.headers.get('cf-connecting-ip')?.trim()
+  if (cloudflareIp) return cloudflareIp
+  if (Deno.env.get('ALLOW_LOCAL_IP_FALLBACK') !== 'true') return null
+  const origin = req.headers.get('origin')
+  if (!origin) return null
+  try {
+    const hostname = new URL(origin).hostname
+    return hostname === 'localhost' || hostname === '127.0.0.1' ? '127.0.0.1' : null
+  } catch {
+    return null
+  }
+}
+
 export function corsHeaders(origin: string | null, allowed = configuredOrigins()) {
   const headers: Record<string, string> = {
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -176,8 +190,11 @@ export async function handler(req: Request) {
   if ((file.type === 'application/pdf' && !startsWith(fileBytes, PDF_SIGNATURE)) || (file.type.includes('officedocument') && !isStructurallyValidDocx(fileBytes))) return json({ error: 'File content does not match its type' }, 400, origin)
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL'); const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
-  const rateSalt = Deno.env.get('RATE_LIMIT_SALT'); const trustedIp = req.headers.get('cf-connecting-ip')
-  if (!supabaseUrl || !serviceKey || !rateSalt || !trustedIp) return json({ error: 'Submission protection unavailable' }, 503, origin)
+  const rateSalt = Deno.env.get('RATE_LIMIT_SALT'); const trustedIp = trustedClientIp(req)
+  if (!supabaseUrl || !serviceKey || !rateSalt || !trustedIp) {
+    console.error('Submission protection unavailable', { missing: [...(!supabaseUrl?['SUPABASE_URL']:[]),...(!serviceKey?['SUPABASE_SERVICE_ROLE_KEY']:[]),...(!rateSalt?['RATE_LIMIT_SALT']:[]),...(!trustedIp?['trusted-client-ip']:[])] })
+    return json({ error: 'Submission protection unavailable' }, 503, origin)
+  }
   const admin = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } })
   if (!await verifyTurnstile(String(form.get('challenge_token') || ''), trustedIp)) return json({ error: 'Bot verification failed' }, 403, origin)
   const { data: vacancy, error: vacancyError } = await admin.from('vacancies').select('id,status,deadline').eq('slug', slug).maybeSingle()
