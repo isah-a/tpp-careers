@@ -1,6 +1,6 @@
 # TPP Careers release verification
 
-Verification date: 2026-10-14  
+Verification date: 2026-10-15
 Branch: `codex/full-recruitment-management`  
 Starting commit: `951ef5ec`
 
@@ -12,7 +12,9 @@ Starting commit: `951ef5ec`
 
 ## Release summary
 
-The frontend builds and its automated tests pass. Public pages, public vacancy search/details, login validation, fallback routing, and unauthenticated redirects for every internal route were exercised in a real browser without console errors.
+The frontend builds and its automated tests pass. The 2026-10-15 fidelity pass aligned the recruiter shell, dashboard, requisition list, candidate roster, vacancy editor tabs, and candidate detail tabs with the checked-in design exports while preserving existing data operations.
+
+The in-app browser webview did not attach during the 2026-10-15 pass, so the previously recorded public/unauthenticated browser results remain historical evidence and the newly changed authenticated surfaces are **NOT TESTED** in a browser.
 
 The release is **not ready for production**. The locally linked Supabase project cannot be identified as staging, does not contain the recruitment-management migration, and no two independent recruiter credentials were available. The migration was not applied and no write was made to the configured project.
 
@@ -99,8 +101,8 @@ Executed with the local Vite server and a real browser. Console-error collection
 
 | Check | Result | Details |
 | --- | --- | --- |
-| `npm test -- --reporter=verbose` | **PASS** | 6 files, 17 tests passed. |
-| `npm run build` | **PASS** | TypeScript and Vite production build completed successfully. |
+| `npm test -- --run` | **PASS** | 5 files, 14 tests passed on 2026-10-15. |
+| `npm run build` | **PASS** | TypeScript and Vite production build completed successfully on 2026-10-15; 1,666 modules transformed. |
 | Migration policy assertions | **PASS** | Review isolation, internal RLS, template ownership, and stage-history assertions passed. |
 | Edge Function tests | **PASS** | 7 tests passed with `deno test --no-check --allow-read supabase/functions/submit-application/index_test.ts`. |
 | Lint | **NOT TESTED** | The repository has no lint script or configured linter. |
@@ -113,13 +115,13 @@ The live Figma file could not be queried because its MCP Starter-plan call limit
 | --- | --- | --- |
 | Brand, type, and palette | **PASS** | Plus Jakarta Sans, violet/magenta accents, light surfaces, rounded controls, and compact typography are represented. |
 | Public careers flow | **PASS** | Careers list, job detail/application, login, and confirmation follow the available references at a functional level. |
-| Internal navigation | **FAIL** | Exported designs use a wider light sidebar with global search, profile, public-view switch, settings/help, interviews, and talent-advisory items. The implementation uses a narrower violet sidebar and only in-scope recruitment modules. |
-| Dashboard composition | **FAIL** | Exported design emphasizes “pipeline velocity”, “action required”, and “priority mandates”; implementation uses metrics, recent vacancies, and stage distribution. Data remains real rather than invented. |
-| Candidate roster/detail | **FAIL** | Exported design uses a denser roster and slide-over candidate drawer with portrait-led presentation. Implementation uses a simpler list and a dedicated detail route. |
-| Vacancy management | **FAIL** | Exported design includes client-registry and intake-health panels not represented in the agreed functional scope. |
+| Internal navigation | **PASS** | Updated to the available export's light 256px shell with global search, public-view action, compact header, profile identity, and responsive drawer. Out-of-scope destinations are not presented as working routes. |
+| Dashboard composition | **PASS** | Now emphasizes live pipeline velocity, action required, priority mandates, and four database-driven operating metrics. |
+| Candidate roster/detail | **PASS** | Roster is now a dense table; detail retains its deep-linked page and uses the required Profile, Q&A, and Notes tabs. |
+| Vacancy management | **PASS** | Requisition list is now a dense table with live counts, filters, pagination, and actions; editor uses the required three-tab organization. |
 | Exact Figma fidelity | **NOT TESTED** | Live Figma nodes, spacing, variants, and responsive frames remain unavailable for direct inspection. |
 
-The failed design-comparison rows are known fidelity differences, not newly introduced functional defects. Closing them would require product/design scope decisions and is intentionally not part of this verification-only pass.
+See `docs/DESIGN_FIDELITY.md` for unavailable references and the remaining comparison limits.
 
 ## Verified defects fixed during this pass
 

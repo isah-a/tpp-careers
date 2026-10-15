@@ -1,30 +1,25 @@
-import { BriefcaseBusiness, Columns3, Files, LayoutDashboard, LogOut, Plus, Users } from 'lucide-react'
-import { NavLink, Outlet } from 'react-router-dom'
+import { BriefcaseBusiness, Columns3, ExternalLink, Files, LayoutDashboard, LogOut, Menu, Plus, Search, Users, X } from 'lucide-react'
+import { useState, type FormEvent } from 'react'
+import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { Brand } from './Brand'
 import { useAuth } from '../context/AuthContext'
 
-const links = [
+const links=[
   {to:'/dashboard',label:'Overview',icon:LayoutDashboard,end:true},
-  {to:'/dashboard/pipeline',label:'Pipeline',icon:Columns3,end:false},
-  {to:'/dashboard/vacancies',label:'Vacancies',icon:BriefcaseBusiness,end:false},
+  {to:'/dashboard/pipeline',label:'Pipeline board',icon:Columns3,end:false},
+  {to:'/dashboard/candidates',label:'Candidate roster',icon:Users,end:false},
+  {to:'/dashboard/vacancies',label:'Requisitions',icon:BriefcaseBusiness,end:false},
   {to:'/dashboard/templates',label:'Templates',icon:Files,end:false},
-  {to:'/dashboard/candidates',label:'Candidates',icon:Users,end:false},
 ]
+const routeNames:Record<string,string>={'/dashboard':'recruitment overview','/dashboard/pipeline':'recruitment pipeline','/dashboard/candidates':'candidate roster','/dashboard/vacancies':'job requisitions','/dashboard/templates':'job templates'}
 
-export function DashboardLayout() {
-  const { signOut } = useAuth()
-  return <div className="min-h-screen bg-[#F7F7F9] text-ink md:flex">
-    <aside className="hidden w-56 shrink-0 border-r border-[#3F00A6] bg-violet px-3 py-5 text-white md:sticky md:top-0 md:flex md:h-screen md:flex-col">
-      <div className="px-2"><Brand inverse/></div>
-      <nav aria-label="Recruiter navigation" className="mt-9 space-y-1">{links.map(({to,label,icon:Icon,end})=><NavLink key={label} to={to} end={end} className={({isActive})=>`flex min-h-11 items-center gap-3 rounded-lg px-3 text-sm font-semibold ${isActive?'bg-white text-violet shadow-sm':'text-white/75 hover:bg-white/10 hover:text-white'}`}><Icon size={18} strokeWidth={1.8}/>{label}</NavLink>)}</nav>
-      <button onClick={()=>void signOut()} className="mt-auto flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-semibold text-white/70 hover:bg-white/10 hover:text-white"><LogOut size={18}/>Log out</button>
-    </aside>
-    <div className="min-w-0 flex-1">
-      <header className="sticky top-0 z-20 border-b border-line bg-white/95 backdrop-blur">
-        <div className="flex min-h-16 items-center justify-between px-4 md:px-8"><div className="md:hidden"><Brand/></div><p className="hidden text-sm font-semibold text-muted md:block">Talent operations</p><NavLink to="/dashboard/vacancies/new" className="btn-primary min-h-10 px-4"><Plus size={16}/><span className="hidden sm:inline">Create vacancy</span><span className="sm:hidden">New</span></NavLink></div>
-        <nav className="flex overflow-x-auto border-t border-line px-3 md:hidden">{links.map(({to,label,icon:Icon,end})=><NavLink key={label} to={to} end={end} className={({isActive})=>`flex shrink-0 items-center justify-center gap-2 border-b-2 px-3 py-3 text-sm font-semibold ${isActive?'border-violet text-violet':'border-transparent text-muted'}`}><Icon size={17}/>{label}</NavLink>)}</nav>
-      </header>
-      <main className="p-4 pb-10 sm:p-6 md:p-8 lg:p-10"><Outlet/></main>
-    </div>
+export function DashboardLayout(){
+  const {signOut,session}=useAuth(),location=useLocation(),navigate=useNavigate(),[open,setOpen]=useState(false)
+  const current=routeNames[location.pathname]||Object.entries(routeNames).filter(([path])=>path!=='/dashboard').find(([path])=>location.pathname.startsWith(`${path}/`))?.[1]||'talent operations'
+  function search(e:FormEvent<HTMLFormElement>){e.preventDefault();const q=String(new FormData(e.currentTarget).get('q')||'').trim();navigate(`/dashboard/candidates${q?`?q=${encodeURIComponent(q)}`:''}`)}
+  const nav=<><div className="px-4"><Brand/><div className="mt-6 flex items-center justify-between rounded-lg bg-panel px-3 py-2"><span className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[.08em] text-ink"><i className="h-2 w-2 rounded-full bg-magenta"/>Workspace mode</span><Link to="/" className="flex items-center gap-1 text-[11px] font-bold text-violet">Public view<ExternalLink size={12}/></Link></div></div><nav aria-label="Recruiter navigation" className="mt-6 space-y-1 px-4">{links.map(({to,label,icon:Icon,end})=><NavLink key={label} to={to} end={end} onClick={()=>setOpen(false)} className={({isActive})=>`flex min-h-10 items-center gap-3 rounded-lg px-3 text-sm font-semibold ${isActive?'bg-violet text-white shadow-sm':'text-[#494456] hover:bg-[#E2E7FF] hover:text-ink'}`}><Icon size={18} strokeWidth={1.8}/>{label}</NavLink>)}</nav><div className="mt-auto px-4"><div className="mb-3 rounded-xl bg-panel p-3"><div className="flex items-center justify-between"><span className="flex items-center gap-2 text-[11px] font-semibold text-muted"><i className="h-2 w-2 rounded-full bg-magenta"/>TPP active sync</span><span className="text-[11px] font-bold text-violet">live</span></div></div><button onClick={()=>void signOut()} className="flex min-h-10 w-full items-center gap-3 rounded-lg px-3 text-sm font-semibold text-muted hover:bg-slate-100 hover:text-ink"><LogOut size={17}/>Log out</button></div></>
+  return <div className="min-h-screen bg-canvas text-ink md:pl-64"><aside className="fixed inset-y-0 left-0 z-50 hidden w-64 flex-col border-r border-line bg-white py-5 shadow-[0_1px_8px_rgba(15,23,42,.04)] md:flex">{nav}</aside>{open&&<div className="fixed inset-0 z-50 md:hidden"><button className="absolute inset-0 bg-slate-950/30" aria-label="Close navigation" onClick={()=>setOpen(false)}/><aside className="relative flex h-full w-72 flex-col bg-white py-5 shadow-2xl"><button className="absolute right-3 top-3 rounded-lg p-2 text-muted" onClick={()=>setOpen(false)} aria-label="Close menu"><X size={20}/></button>{nav}</aside></div>}
+    <header className="fixed left-0 right-0 top-0 z-40 flex h-16 items-center justify-between border-b border-line bg-white px-4 shadow-[0_1px_8px_rgba(15,23,42,.04)] md:left-64 md:px-8"><div className="flex items-center gap-3"><button className="rounded-lg p-2 text-muted md:hidden" onClick={()=>setOpen(true)} aria-label="Open menu"><Menu size={21}/></button><div className="hidden items-center gap-2 text-xs text-muted sm:flex"><b className="text-ink">TPP workspace</b><span>/</span><span className="lowercase">{current}</span><i className="ml-1 h-2 w-2 rounded-full bg-magenta"/></div></div><div className="flex items-center gap-3"><form onSubmit={search} className="relative hidden lg:block"><Search className="pointer-events-none absolute left-3 top-2.5 text-muted" size={16}/><input name="q" aria-label="Global candidate search" className="h-9 w-72 rounded-lg bg-panel pl-9 pr-3 text-sm outline-none focus:ring-2 focus:ring-violet/20" placeholder="Search candidates or requisitions…"/></form><Link to="/dashboard/vacancies/new" className="btn-primary min-h-9 px-4 py-2"><Plus size={15}/><span className="hidden sm:inline">New requisition</span></Link><span className="grid h-9 w-9 place-items-center rounded-full bg-[#E7DEFF] text-xs font-bold text-violet" title={session?.user.email||'Recruiter'}>{(session?.user.email||'TP').slice(0,2).toUpperCase()}</span></div></header>
+    <main className="min-h-screen px-4 pb-12 pt-24 sm:px-6 md:px-8"><Outlet/></main>
   </div>
 }
