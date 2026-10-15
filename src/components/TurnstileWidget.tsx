@@ -63,6 +63,7 @@ export const TurnstileWidget = forwardRef<TurnstileWidgetHandle, Props>(function
     void loadTurnstile().then(turnstile => {
       if (!active || !container.current) return
       api.current = turnstile
+      onStatus('pending')
       widgetId.current = turnstile.render(container.current, {
         sitekey: siteKey,
         callback: (token: string) => { if (active) { onToken(token); onStatus('verified') } },
@@ -70,7 +71,6 @@ export const TurnstileWidget = forwardRef<TurnstileWidgetHandle, Props>(function
         'timeout-callback': () => { if (active) { onToken(null); onStatus('expired') } },
         'error-callback': () => { if (active) { onToken(null); onStatus('error') } },
       })
-      onStatus('pending')
     }).catch(() => { if (active) { setLoadFailed(true); onToken(null); onStatus('error') } })
     return () => { active = false; if (api.current && widgetId.current) api.current.remove(widgetId.current); widgetId.current = undefined }
   }, [attempt, onStatus, onToken, siteKey])

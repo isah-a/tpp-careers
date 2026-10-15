@@ -29,6 +29,14 @@ describe('TurnstileWidget',()=>{
     expect(onToken).toHaveBeenLastCalledWith(null); expect(onStatus).toHaveBeenLastCalledWith('error')
   })
 
+  it('does not overwrite synchronous verification with pending',async()=>{
+    const onToken=vi.fn(); const onStatus=vi.fn()
+    window.turnstile={render:vi.fn((_container,options:any)=>{options.callback('instant-token');return 'widget-1'}),reset:vi.fn(),remove:vi.fn()}
+    render(<TurnstileWidget siteKey="test-site-key" onToken={onToken} onStatus={onStatus}/>)
+    await waitFor(()=>expect(onToken).toHaveBeenLastCalledWith('instant-token'))
+    expect(onStatus).toHaveBeenLastCalledWith('verified')
+  })
+
   it('uses the backend field name for token submission',()=>{
     const form=new FormData(); setTurnstileToken(form,'token-value')
     expect(form.get('challenge_token')).toBe('token-value')
