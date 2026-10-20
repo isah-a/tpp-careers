@@ -10,7 +10,9 @@ import {
   ChevronRight,
   Info,
   Check,
-  X
+  X,
+  CircleAlert,
+  Loader2,
 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../context/AuthContext'
@@ -20,7 +22,8 @@ interface ApplicationWithMeta extends Application {
   userRating?: number
 }
 
-// 10 Mock records strictly matching Figma Jobs.png for visual verification
+// 10 Mock records strictly matching Figma Jobs.png for visual verification.
+// Restricted to development mode and ONLY loaded when ?fixture=true is explicitly requested.
 const FIGMA_JOBS_FIXTURE: ApplicationWithMeta[] = [
   {
     id: 'figma-1',
@@ -160,17 +163,24 @@ export function CandidatesPage() {
   const location = useLocation()
   const [searchParams, setSearchParams] = useSearchParams()
 
-  const isFixtureMode =
+  // STRICT REQUIREMENT 1: Fixture data is strictly blocked in production builds
+  // and ONLY loaded when explicitly requested via ?fixture=true in development.
+  const isFixtureRequested =
+    !import.meta.env.PROD &&
     typeof window !== 'undefined' &&
     new URLSearchParams(location.search).get('fixture') === 'true'
 
   // Query & filter states
   const [applications, setApplications] = useState<ApplicationWithMeta[]>(
-    isFixtureMode ? FIGMA_JOBS_FIXTURE : []
+    isFixtureRequested ? FIGMA_JOBS_FIXTURE : []
   )
-  const [loading, setLoading] = useState(!isFixtureMode)
+  const [loading, setLoading] = useState(!isFixtureRequested)
   const [backendError, setBackendError] = useState<string | null>(null)
-  const [isUsingFixture, setIsUsingFixture] = useState(isFixtureMode)
+  const [isUsingFixture, setIsUsingFixture] = useState(isFixtureRequested)
+
+  // User action notifications (errors & successes)
+  const [actionError, setActionError] = useState<string | null>(null)
+  const [actionSuccess, setActionSuccess] = useState<string | null>(null)
 
   const [searchQuery, setSearchQuery] = useState(searchParams.get('q') || '')
   const [selectedStage, setSelectedStage] = useState<string>('all')
@@ -183,12 +193,14 @@ export function CandidatesPage() {
   const [pageSize, setPageSize] = useState<number>(8)
   const [currentPage, setCurrentPage] = useState<number>(1)
 
-  // Recruiter rating saving feedback
+  // Tracking in-progress updates
   const [ratingUpdatingId, setRatingUpdatingId] = useState<string | null>(null)
+  const [stageUpdatingId, setStageUpdatingId] = useState<string | null>(null)
+  const [activeStageMenuId, setActiveStageMenuId] = useState<string | null>(null)
 
   // Load live data from Supabase
   useEffect(() => {
-    if (isFixtureMode) {
+    if (isFixtureRequested) {
       setApplications(FIGMA_JOBS_FIXTURE)
       setIsUsingFixture(true)
       setLoading(false)
@@ -202,9 +214,13 @@ export function CandidatesPage() {
       setBackendError(null)
 
       try {
+        // STRICT SCHEMA REQUIREMENT:
+        // Table 'applications' has 'stage' (public.application_stage enum), NOT 'status'.
+        // Table 'vacancies' has 'status' (public.vacancy_status enum).
+        // Table 'application_reviews' stores recruiter ratings with primary key (application_id, reviewer_id).
         const { data, error } = await supabase
           .from('applications')
-          .select('*, vacancies(id, title, slug), application_reviews(reviewer_id, rating)')
+          .select('id, vacancy_id, full_name, email, phone, cv_path, answers, stage, stage_updated_at, created_at, vacancies(id, title, slug), application_reviews(reviewer_id, rating)')
           .order('created_at', { ascending: false })
 
         if (error) throw new Error(error.message)
@@ -226,10 +242,12 @@ export function CandidatesPage() {
       } catch (err: unknown) {
         if (isMounted) {
           const msg = err instanceof Error ? err.message : 'Database error'
-          console.warn('[CandidatesPage] Falling back to visual fixture:', msg)
+          console.error('[CandidatesPage] Failed to load live applications:', msg)
           setBackendError(msg)
-          setApplications(FIGMA_JOBS_FIXTURE)
-          setIsUsingFixture(true)
+          // STRICT REQUIREMENT 1: Zero automatic fallback to fabricated candidate records!
+          // When Supabase is unavailable, applications remains empty and an explicit error is surfaced.
+          setApplications([])
+          setIsUsingFixture(false)
         }
       } finally {
         if (isMounted) {
@@ -243,7 +261,7 @@ export function CandidatesPage() {
     return () => {
       isMounted = false
     }
-  }, [isFixtureMode, session?.user?.id])
+  }, [isFixtureRequested, session?.user?.id])
 
   // Filter application rows
   const filteredApplications = useMemo(() => {
@@ -298,9 +316,13 @@ export function CandidatesPage() {
   }
 
   // Recruiter-specific 5-star rating handler
+  // STRICT REQUIREMENT 3 & 4:
+  // - Upserts to application_reviews using (application_id, session.user.id).
+  // - Cannot overwrite another recruiter's review because primary key is (application_id, reviewer_id)
+  //   and RLS policy strictly enforces reviewer_id = auth.uid().
+  // - Errors are visibly displayed in actionError and do NOT falsely indicate success.
   const handleRate = async (applicationId: string, ratingValue: number) => {
-    if (isUsingFixture || !session?.user?.id) {
-      // Optimistic update in visual fixture
+    if (isUsingFixture) {
       setApplications(prev =>
         prev.map(app =>
           app.id === applicationId
@@ -311,41 +333,131 @@ export function CandidatesPage() {
       return
     }
 
+    if (!session?.user?.id) {
+      setActionError('You must be signed in as an authenticated recruiter to rate applicants.')
+      return
+    }
+
+    setActionError(null)
     setRatingUpdatingId(applicationId)
-    const newRating = ratingValue
 
     try {
-      const { error } = await supabase.from('application_reviews').upsert(
-        {
-          application_id: applicationId,
-          reviewer_id: session.user.id,
-          rating: newRating,
-          assessment: '',
-        },
-        { onConflict: 'application_id,reviewer_id' }
-      )
+      const currentApp = applications.find(a => a.id === applicationId)
+      const currentRating = currentApp?.userRating || 0
 
-      if (error) throw error
+      if (currentRating === ratingValue) {
+        // Recruiter clicked current rating -> remove rating review row
+        const { error: delError } = await supabase
+          .from('application_reviews')
+          .delete()
+          .match({ application_id: applicationId, reviewer_id: session.user.id })
 
-      setApplications(prev =>
-        prev.map(app =>
-          app.id === applicationId ? { ...app, userRating: newRating } : app
+        if (delError) throw delError
+
+        // Confirmed in DB: update UI
+        setApplications(prev =>
+          prev.map(app => (app.id === applicationId ? { ...app, userRating: 0 } : app))
         )
-      )
-    } catch (err) {
-      console.error('Failed to update recruiter rating:', err)
+        setActionSuccess('Recruiter rating cleared.')
+      } else {
+        // Upsert recruiter's own rating
+        const targetRating = Math.max(1, Math.min(5, ratingValue))
+        const { error: upsertError } = await supabase
+          .from('application_reviews')
+          .upsert(
+            {
+              application_id: applicationId,
+              reviewer_id: session.user.id,
+              rating: targetRating,
+              assessment: '',
+            },
+            { onConflict: 'application_id,reviewer_id' }
+          )
+
+        if (upsertError) throw upsertError
+
+        // Confirmed in DB: update UI
+        setApplications(prev =>
+          prev.map(app =>
+            app.id === applicationId ? { ...app, userRating: targetRating } : app
+          )
+        )
+        setActionSuccess(`Recruiter rating updated to ${targetRating} star${targetRating > 1 ? 's' : ''}.`)
+      }
+
+      setTimeout(() => setActionSuccess(null), 3000)
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Database update failed'
+      console.error('[CandidatesPage] Rating update error:', msg)
+      // STRICT REQUIREMENT 4: Display error visibly, do NOT update local state, do NOT falsely show success!
+      setActionError(`Could not save recruiter rating: ${msg}`)
     } finally {
       setRatingUpdatingId(null)
     }
   }
 
-  // Download CV handler
-  const handleDownloadCv = async (cvPath: string, candidateName: string) => {
+  // Candidate pipeline stage transition handler
+  // STRICT REQUIREMENT 2 & 4:
+  // - Applications schema uses 'stage' (public.application_stage enum), NOT 'status'.
+  // - Direct updates to applications.stage are restricted by RLS; transitions must call
+  //   the existing security-definer RPC 'transition_application_stage'.
+  // - Errors are visibly displayed in actionError and do NOT falsely indicate success.
+  const handleStageChange = async (applicationId: string, newStage: ApplicationStage) => {
+    setActiveStageMenuId(null)
+
     if (isUsingFixture) {
-      alert(`[Figma Visual Fixture] In live mode, this downloads CV for ${candidateName} from Supabase storage.`)
+      setApplications(prev =>
+        prev.map(app => (app.id === applicationId ? { ...app, stage: newStage } : app))
+      )
       return
     }
 
+    setActionError(null)
+    setStageUpdatingId(applicationId)
+
+    try {
+      const { error } = await supabase.rpc('transition_application_stage', {
+        p_application_id: applicationId,
+        p_to_stage: newStage,
+        p_note: null,
+      })
+
+      if (error) throw error
+
+      // Confirmed in DB: update UI
+      setApplications(prev =>
+        prev.map(app => (app.id === applicationId ? { ...app, stage: newStage } : app))
+      )
+      setActionSuccess(`Candidate stage transitioned to ${newStage}.`)
+      setTimeout(() => setActionSuccess(null), 3500)
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Transition RPC failed'
+      console.error('[CandidatesPage] Stage transition error:', msg)
+      // STRICT REQUIREMENT 4: Display error visibly, do NOT update local state, do NOT falsely show success!
+      setActionError(`Could not update candidate stage: ${msg}`)
+    } finally {
+      setStageUpdatingId(null)
+    }
+  }
+
+  // Download CV handler
+  // STRICT REQUIREMENT 5:
+  // - Generates a short-lived 60s signed URL from the private 'cvs' bucket.
+  // - Respects existing storage RLS (recruiter_cv_read).
+  // - Errors are surfaced cleanly in actionError.
+  const handleDownloadCv = async (cvPath: string, candidateName: string) => {
+    if (isUsingFixture) {
+      setActionSuccess(`[Figma Visual Fixture] In live mode, this downloads CV for ${candidateName} via signed URL.`)
+      setTimeout(() => setActionSuccess(null), 4000)
+      return
+    }
+
+    if (!cvPath) {
+      setActionError(`No CV file path found for candidate ${candidateName}.`)
+      return
+    }
+
+    setActionError(null)
     try {
       const { data, error } = await supabase.storage.from('cvs').createSignedUrl(cvPath, 60, {
         download: true,
@@ -354,10 +466,13 @@ export function CandidatesPage() {
       if (error) throw error
       if (data?.signedUrl) {
         window.open(data.signedUrl, '_blank', 'noopener,noreferrer')
+      } else {
+        throw new Error('Storage service returned an empty URL')
       }
-    } catch (err) {
-      console.error('Failed to download CV from storage:', err)
-      alert('Could not download CV file. Ensure Supabase storage bucket "cvs" is accessible.')
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Storage permission error'
+      console.error('[CandidatesPage] CV download error:', msg)
+      setActionError(`Could not download CV for ${candidateName}: ${msg}`)
     }
   }
 
@@ -376,63 +491,180 @@ export function CandidatesPage() {
   }
 
   // Render Status Badge Pill exactly matching Figma Jobs.png
-  const renderStatusBadge = (stage: ApplicationStage | string) => {
+  const renderStatusBadge = (stage: ApplicationStage | string, appId: string) => {
+    let badgeClass = ''
+    let label = ''
+
     switch (stage) {
-      case 'new':
       case 'screening':
-        return (
-          <span className="inline-flex items-center px-3 py-0.5 rounded-md text-xs font-medium bg-[#F3EBFD] text-[#5C00DD] border border-[#5C00DD]/20">
-            New
-          </span>
-        )
-      case 'interview':
-        return (
-          <span className="inline-flex items-center px-3 py-0.5 rounded-md text-xs font-medium bg-[#FFF7ED] text-[#C2410C] border border-[#FDBA74]/40">
-            Interview
-          </span>
-        )
+        badgeClass = 'bg-[#F3EBFD] text-[#5C00DD] border-[#5C00DD]/20 hover:bg-[#E9DBFC]'
+        label = 'New'
+        break
       case 'review':
-        return (
-          <span className="inline-flex items-center px-3 py-0.5 rounded-md text-xs font-medium bg-[#FDF2F8] text-[#BE185D] border border-[#F472B6]/40">
-            Screening
-          </span>
-        )
-      case 'hired':
+        badgeClass = 'bg-[#FDF2F8] text-[#BE185D] border-[#F472B6]/40 hover:bg-[#FCE7F3]'
+        label = 'Screening'
+        break
+      case 'interview':
+        badgeClass = 'bg-[#FFF7ED] text-[#C2410C] border-[#FDBA74]/40 hover:bg-[#FFEDD5]'
+        label = 'Interview'
+        break
       case 'offer':
-        return (
-          <span className="inline-flex items-center px-3 py-0.5 rounded-md text-xs font-medium bg-[#F0FDF4] text-[#15803D] border border-[#86EFAC]/50">
-            Hired
-          </span>
-        )
+      case 'hired':
+        badgeClass = 'bg-[#F0FDF4] text-[#15803D] border-[#86EFAC]/50 hover:bg-[#DCFCE7]'
+        label = 'Hired'
+        break
       case 'rejected':
       default:
-        return (
-          <span className="inline-flex items-center px-3 py-0.5 rounded-md text-xs font-medium bg-[#FEF2F2] text-[#B91C1C] border border-[#FCA5A5]/40">
-            Rejected
-          </span>
-        )
+        badgeClass = 'bg-[#FEF2F2] text-[#B91C1C] border-[#FCA5A5]/40 hover:bg-[#FEE2E2]'
+        label = 'Rejected'
+        break
     }
+
+    const isUpdating = stageUpdatingId === appId
+    const isMenuOpen = activeStageMenuId === appId
+
+    return (
+      <div className="relative inline-block text-left">
+        <button
+          type="button"
+          disabled={isUpdating}
+          onClick={() => setActiveStageMenuId(prev => (prev === appId ? null : appId))}
+          title="Click to transition pipeline stage"
+          className={`inline-flex items-center gap-1 px-3 py-0.5 rounded-md text-xs font-medium border transition-colors cursor-pointer ${badgeClass}`}
+        >
+          {isUpdating ? (
+            <Loader2 size={12} className="animate-spin" />
+          ) : (
+            <>
+              <span>{label}</span>
+              <ChevronDown size={11} className="opacity-60" />
+            </>
+          )}
+        </button>
+
+        {isMenuOpen && (
+          <div className="absolute left-0 mt-1 w-40 rounded-xl bg-white shadow-modal border border-gray-100 p-1.5 z-40 animate-in fade-in">
+            <div className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-gray-400 border-b border-gray-100">
+              Change Stage
+            </div>
+            <div className="py-1">
+              {[
+                { stage: 'screening', label: 'New / Screening' },
+                { stage: 'review', label: 'Review' },
+                { stage: 'interview', label: 'Interview' },
+                { stage: 'offer', label: 'Offer' },
+                { stage: 'hired', label: 'Hired' },
+                { stage: 'rejected', label: 'Rejected' },
+              ].map(opt => (
+                <button
+                  key={opt.stage}
+                  type="button"
+                  onClick={() => void handleStageChange(appId, opt.stage as ApplicationStage)}
+                  className={`w-full flex items-center justify-between px-2.5 py-1.5 text-xs rounded-lg transition-colors text-left ${
+                    stage === opt.stage
+                      ? 'bg-[#F3EBFD] text-[#5C00DD] font-semibold'
+                      : 'text-gray-700 hover:bg-gray-50'
+                  }`}
+                >
+                  <span>{opt.label}</span>
+                  {stage === opt.stage && <Check size={12} />}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    )
   }
 
   return (
     <div className="p-8 max-w-[1360px] mx-auto flex flex-col gap-5">
-      {/* Development Fixture Banner (Stripped in production) */}
+      {/* Action Error Banner */}
+      {actionError && (
+        <div
+          role="alert"
+          className="rounded-xl border border-red-200 bg-red-50 p-4 text-xs text-red-800 flex items-start gap-3 shadow-xs animate-in fade-in"
+        >
+          <CircleAlert size={18} className="text-red-600 shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <p className="font-semibold text-red-900">Action Failed</p>
+            <p className="mt-0.5 text-red-700">{actionError}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setActionError(null)}
+            className="text-red-500 hover:text-red-700 p-0.5 cursor-pointer"
+            aria-label="Dismiss error notification"
+          >
+            <X size={16} />
+          </button>
+        </div>
+      )}
+
+      {/* Action Success Banner */}
+      {actionSuccess && (
+        <div
+          role="status"
+          className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-800 flex items-center justify-between shadow-xs animate-in fade-in"
+        >
+          <div className="flex items-center gap-2">
+            <Check size={16} className="text-emerald-600 shrink-0" />
+            <span className="font-medium">{actionSuccess}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setActionSuccess(null)}
+            className="text-emerald-500 hover:text-emerald-700 p-0.5 cursor-pointer"
+            aria-label="Dismiss success notification"
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
+
+      {/* Database Connection Error Notice (When live fetch fails) */}
+      {backendError && (
+        <div
+          role="alert"
+          className="rounded-xl border border-amber-300 bg-amber-50/90 p-4 text-xs text-amber-900 flex items-start gap-3 shadow-xs"
+        >
+          <CircleAlert size={18} className="text-amber-700 shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <p className="font-semibold text-amber-900">Database Connection Unavailable</p>
+            <p className="mt-0.5 text-amber-800">
+              Could not retrieve application records from Supabase: <span className="font-mono">{backendError}</span>.
+            </p>
+            {!import.meta.env.PROD && (
+              <p className="mt-1 text-amber-700">
+                To preview the approved Figma visual fixture in development while the database is offline, append{' '}
+                <code className="bg-amber-100 px-1 py-0.5 rounded font-mono text-[#5C00DD]">?fixture=true</code> to the URL.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Explicit Development Visual Fixture Banner (Stripped in production) */}
       {!import.meta.env.PROD && isUsingFixture && (
         <div
           role="status"
-          className="rounded-xl border border-amber-300 bg-amber-50/90 p-4 text-xs text-amber-900 flex items-start gap-3 shadow-xs"
+          className="rounded-xl border border-purple-200 bg-purple-50/80 p-4 text-xs text-purple-900 flex items-start gap-3 shadow-xs"
         >
-          <Info size={18} className="text-amber-700 shrink-0 mt-0.5" />
+          <Info size={18} className="text-purple-700 shrink-0 mt-0.5" />
           <div className="flex-1">
-            <p className="font-semibold text-amber-800">
-              DEVELOPMENT VISUAL FIXTURE MODE — Isolated from production data
+            <p className="font-semibold text-purple-900">
+              DEVELOPMENT VISUAL FIXTURE MODE (?fixture=true)
             </p>
-            <p className="mt-0.5 text-amber-700">
-              {backendError
-                ? `Local Supabase returned: "${backendError}". Rendering Figma Jobs.png 10-row applicant fixture.`
-                : 'Displaying approved Figma Jobs.png visual fixture (Philip Nwachukwu Mathew, Pristia Candra, etc.) for design verification (?fixture=true).'}
+            <p className="mt-0.5 text-purple-800">
+              Displaying the 10-row sample applicant fixture matching approved Figma Jobs.png (Philip Nwachukwu Mathew, Pristia Candra, etc.) for visual parity inspection.
             </p>
           </div>
+          <Link
+            to="/dashboard/jobs"
+            className="text-xs font-semibold text-[#5C00DD] underline hover:text-[#4900B0] self-center"
+          >
+            Switch to Live DB
+          </Link>
         </div>
       )}
 
@@ -474,7 +706,7 @@ export function CandidatesPage() {
           {searchQuery && (
             <button
               onClick={() => setSearchQuery('')}
-              className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600"
+              className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600 cursor-pointer"
             >
               <X size={16} />
             </button>
@@ -507,6 +739,7 @@ export function CandidatesPage() {
                   { value: 'screening', label: 'Screening / New' },
                   { value: 'review', label: 'Review' },
                   { value: 'interview', label: 'Interview' },
+                  { value: 'offer', label: 'Offer' },
                   { value: 'hired', label: 'Hired' },
                   { value: 'rejected', label: 'Rejected' },
                 ].map(item => (
@@ -517,7 +750,7 @@ export function CandidatesPage() {
                       setFilterMenuOpen(false)
                       setCurrentPage(1)
                     }}
-                    className={`w-full flex items-center justify-between px-3 py-2 text-xs rounded-lg transition-colors text-left ${
+                    className={`w-full flex items-center justify-between px-3 py-2 text-xs rounded-lg transition-colors text-left cursor-pointer ${
                       selectedStage === item.value
                         ? 'bg-[#F3EBFD] text-[#5C00DD] font-semibold'
                         : 'text-gray-700 hover:bg-gray-50'
@@ -570,6 +803,24 @@ export function CandidatesPage() {
                   <td colSpan={7} className="px-6 py-16 text-center text-gray-400">
                     <div className="w-7 h-7 rounded-full border-2 border-[#5C00DD] border-t-transparent animate-spin mx-auto mb-2" />
                     <p className="text-sm font-medium">Loading applicant roster...</p>
+                  </td>
+                </tr>
+              ) : backendError && applications.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="px-6 py-16 text-center text-gray-500">
+                    <CircleAlert className="w-8 h-8 text-amber-500 mx-auto mb-2" />
+                    <p className="text-sm font-semibold text-gray-800">Database Connection Unavailable</p>
+                    <p className="text-xs text-gray-500 mt-1 max-w-md mx-auto">{backendError}</p>
+                    {!import.meta.env.PROD && (
+                      <div className="mt-3">
+                        <Link
+                          to="/dashboard/jobs?fixture=true"
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#5C00DD] text-white hover:bg-[#4900B0] transition-colors"
+                        >
+                          View Approved Figma Fixture (?fixture=true)
+                        </Link>
+                      </div>
+                    )}
                   </td>
                 </tr>
               ) : paginatedApplications.length === 0 ? (
@@ -636,7 +887,7 @@ export function CandidatesPage() {
                                 type="button"
                                 onClick={() => void handleRate(row.id, starNum)}
                                 disabled={ratingUpdatingId === row.id}
-                                className="p-0.5 cursor-pointer text-amber-400 hover:scale-115 transition-transform"
+                                className="p-0.5 cursor-pointer text-amber-400 hover:scale-115 transition-transform disabled:opacity-50"
                                 aria-label={`Rate ${starNum} stars`}
                               >
                                 <Star
@@ -654,9 +905,9 @@ export function CandidatesPage() {
                         </div>
                       </td>
 
-                      {/* Status */}
+                      {/* Status / Stage Badge with Transition Popover */}
                       <td className="px-6 py-4.5">
-                        {renderStatusBadge(row.stage)}
+                        {renderStatusBadge(row.stage, row.id)}
                       </td>
 
                       {/* Resume Download Action */}
