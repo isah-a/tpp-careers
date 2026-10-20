@@ -68,3 +68,103 @@
 ::-webkit-scrollbar-thumb:hover {
   background: #7a7488;
 }
+
+/* Rich-text editor (Tiptap) and rendered HTML typography */
+.tiptap-content p,
+.rendered-html p {
+  margin-top: 0.5rem;
+  margin-bottom: 0.5rem;
+  line-height: 1.65;
+}
+
+.tiptap-content ul,
+.rendered-html ul {
+  list-style-type: disc !important;
+  padding-left: 1.5rem !important;
+  margin-top: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.tiptap-content ol,
+.rendered-html ol {
+  list-style-type: decimal !important;
+  padding-left: 1.5rem !important;
+  margin-top: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.tiptap-content li,
+.rendered-html li {
+  margin-top: 0.25rem;
+  margin-bottom: 0.25rem;
+  display: list-item;
+}
+
+.tiptap-content ul ul,
+.rendered-html ul ul {
+  list-style-type: circle !important;
+  padding-left: 1.25rem !important;
+}
+
+.tiptap-content ol ol,
+.rendered-html ol ol {
+  list-style-type: lower-alpha !important;
+  padding-left: 1.25rem !important;
+}
+
+.tiptap-content strong,
+.rendered-html strong {
+  font-weight: 700;
+  color: #111827;
+}
+
+.tiptap-content em,
+.rendered-html em {
+  font-style: italic;
+}
+
+.tiptap-content u,
+.rendered-html u {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.tiptap-content h1,
+.rendered-html h1 {
+  font-size: 1.35rem;
+  font-weight: 700;
+  margin-top: 1rem;
+  margin-bottom: 0.5rem;
+  color: #111827;
+}
+
+.tiptap-content h2,
+.rendered-html h2 {
+  font-size: 1.15rem;
+  font-weight: 700;
+  margin-top: 0.75rem;
+  margin-bottom: 0.5rem;
+  color: #111827;
+}
+
+.tiptap-content h3,
+.rendered-html h3 {
+  font-size: 1rem;
+  font-weight: 700;
+  margin-top: 0.5rem;
+  margin-bottom: 0.25rem;
+  color: #111827;
+}
+
+.tiptap-content:focus {
+  outline: none;
+}
+
+.tiptap-content p.is-editor-empty:first-child::before {
+  color: #9ca3af;
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}
+

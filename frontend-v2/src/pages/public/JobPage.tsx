@@ -14,6 +14,7 @@ import { isConfigured, supabase } from '../../lib/supabase'
 import { applicationBaseSchema, validateAnswers, validateCv } from '../../lib/validation'
 import { parseSubmissionError } from '../../lib/submissionError'
 import { formatCompensation } from '../../lib/recruitment'
+import { sanitizeHtml } from '../../lib/sanitize'
 import type { Vacancy, ScreeningQuestion } from '../../types'
 
 export function JobPage() {
@@ -223,13 +224,19 @@ export function JobPage() {
             <div className="mt-8 space-y-6 text-sm text-gray-600 leading-relaxed">
               <div>
                 <h2 className="text-base font-bold text-gray-900 mb-2">About the Role</h2>
-                <p className="whitespace-pre-line">{job.description}</p>
+                <div
+                  className="rendered-html text-sm text-gray-700 leading-relaxed"
+                  dangerouslySetInnerHTML={{ __html: sanitizeHtml(job.description) }}
+                />
               </div>
 
               {job.requirements && (
                 <div>
                   <h2 className="text-base font-bold text-gray-900 mb-2">Qualifications & Requirements</h2>
-                  <p className="whitespace-pre-line">{job.requirements}</p>
+                  <div
+                    className="rendered-html text-sm text-gray-700 leading-relaxed"
+                    dangerouslySetInnerHTML={{ __html: sanitizeHtml(job.requirements) }}
+                  />
                 </div>
               )}
 
@@ -250,8 +257,12 @@ export function JobPage() {
                 <div>
                   <h2 className="text-base font-bold text-gray-900 mb-2">Benefits</h2>
                   <ul className="list-disc pl-5 space-y-1">
-                    {job.benefits?.map(benefit => (
-                      <li key={benefit}>{benefit}</li>
+                    {job.benefits?.map((benefit, i) => (
+                      <li
+                        key={i}
+                        className="rendered-html"
+                        dangerouslySetInnerHTML={{ __html: sanitizeHtml(benefit) }}
+                      />
                     ))}
                   </ul>
                 </div>

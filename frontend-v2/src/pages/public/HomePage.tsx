@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Search, MapPin, Briefcase, ArrowRight, AlertCircle, Building2, Clock } from 'lucide-react'
 import { isConfigured, supabase } from '../../lib/supabase'
+import { stripHtml } from '../../lib/sanitize'
 import type { Vacancy } from '../../types'
 
 export function HomePage() {
@@ -182,7 +183,7 @@ export function HomePage() {
                   </h3>
 
                   <p className="mt-1.5 text-xs text-gray-500 line-clamp-2 max-w-2xl leading-relaxed">
-                    {job.description}
+                    {stripHtml(job.description)}
                   </p>
 
                   <div className="mt-3 flex items-center gap-4 text-xs text-gray-400">

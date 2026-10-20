@@ -3,7 +3,6 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   AlertCircle,
   ArrowLeft,
-  Bold,
   Briefcase,
   Calendar,
   Check,
@@ -16,9 +15,6 @@ import {
   ExternalLink,
   GripVertical,
   Info,
-  Italic,
-  List,
-  ListOrdered,
   Loader2,
   Lock,
   MapPin,
@@ -26,13 +22,13 @@ import {
   Plus,
   Save,
   Trash2,
-  Underline,
   User,
   X,
 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../context/AuthContext'
 import { parseQuestionOptions, vacancyDraftSchema, vacancySchema } from '../../lib/validation'
+import { RichTextEditor } from '../../components/ui/RichTextEditor'
 import type { JobTemplate, QuestionType, ScreeningQuestion, VacancyStatus, WorkplaceType } from '../../types'
 
 interface FormState {
@@ -87,6 +83,25 @@ const DEFAULT_PRESET_SKILLS = [
   'Strong communication',
   'High on Execution',
 ]
+
+/**
+ * Extracts individual perk/benefit items from HTML or plain lines
+ * for PostgreSQL text[] storage.
+ */
+function parseBenefitsHtmlOrLines(raw: string): string[] {
+  if (!raw) return []
+  const liMatches = Array.from(raw.matchAll(/<li[^>]*>([\s\S]*?)<\/li>/gi))
+    .map(m => m[1].trim())
+    .filter(Boolean)
+  if (liMatches.length > 0) return liMatches
+
+  const pMatches = Array.from(raw.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi))
+    .map(m => m[1].trim())
+    .filter(Boolean)
+  if (pMatches.length > 0) return pMatches
+
+  return raw.split('\n').map(b => b.trim()).filter(Boolean)
+}
 
 export function VacancyEditorPage() {
   const { id } = useParams<{ id: string }>()
@@ -144,9 +159,10 @@ export function VacancyEditorPage() {
             employment_type: 'Full-time',
             workplace_type: id === 'v-1' ? 'hybrid' : 'onsite',
             description: id === 'v-1'
-              ? 'Lead strategic operational initiatives across client engagements.'
-              : 'Architect brand messaging, PR campaigns, and omni-channel growth.',
-            requirements: 'Minimum 5 years of relevant industry leadership experience.',
+              ? '<p>Lead strategic operational initiatives across client engagements.</p>'
+              : '<p>Architect brand messaging, PR campaigns, and omni-channel growth.</p>',
+            requirements: '<p>Minimum 5 years of relevant industry leadership experience.</p>',
+            benefits: '<ul><li>Comprehensive Health insurance (HMO)</li><li>Hybrid work flexibility</li><li>Annual learning stipend</li></ul>',
             status: 'active',
           })
 
@@ -220,7 +236,10 @@ export function VacancyEditorPage() {
               start_date: data.start_date || '',
               deadline: data.deadline || '',
               skills: Array.isArray(data.skills) ? data.skills : [],
-              benefits: Array.isArray(data.benefits) ? data.benefits.join('\n') : (data.benefits || ''),
+              benefits:
+                Array.isArray(data.benefits) && data.benefits.length > 0
+                  ? `<ul>${data.benefits.map((b: string) => `<li>${b}</li>`).join('')}</ul>`
+                  : (data.benefits || ''),
               description: data.description || '',
               requirements: data.requirements || '',
               status: data.status || 'draft',
@@ -294,7 +313,10 @@ export function VacancyEditorPage() {
               compensation_max: t.compensation_max?.toString() || '',
               compensation_currency: t.compensation_currency || 'NGN',
               skills: t.skills || [],
-              benefits: t.benefits?.join('\n') || '',
+              benefits:
+                Array.isArray(t.benefits) && t.benefits.length > 0
+                  ? `<ul>${t.benefits.map((b: string) => `<li>${b}</li>`).join('')}</ul>`
+                  : (t.benefits?.join('\n') || ''),
               description: t.description || '',
               requirements: t.requirements || '',
               status: 'draft',
@@ -528,10 +550,7 @@ export function VacancyEditorPage() {
       start_date: form.start_date || null,
       deadline: form.deadline || null,
       skills: form.skills,
-      benefits: form.benefits
-        .split('\n')
-        .map(b => b.trim())
-        .filter(Boolean),
+      benefits: parseBenefitsHtmlOrLines(form.benefits),
       status: targetStatus,
     }
   }
@@ -1175,35 +1194,12 @@ export function VacancyEditorPage() {
                   Job Description <span className="text-red-500">*</span>
                 </h2>
 
-                <div className="rounded-xl border border-gray-200 overflow-hidden focus-within:ring-2 focus-within:ring-[#5C00DD] focus-within:border-transparent">
-                  {/* Visual Formatting Toolbar matching Jobs-2.png */}
-                  <div className="bg-gray-50 border-b border-gray-200 px-3 py-2 flex items-center gap-1">
-                    <button type="button" className="p-1.5 text-gray-600 hover:bg-gray-200 rounded" title="Bold">
-                      <Bold size={14} />
-                    </button>
-                    <button type="button" className="p-1.5 text-gray-600 hover:bg-gray-200 rounded" title="Italic">
-                      <Italic size={14} />
-                    </button>
-                    <button type="button" className="p-1.5 text-gray-600 hover:bg-gray-200 rounded" title="Underline">
-                      <Underline size={14} />
-                    </button>
-                    <span className="w-px h-4 bg-gray-300 mx-1" />
-                    <button type="button" className="p-1.5 text-gray-600 hover:bg-gray-200 rounded" title="Bullet List">
-                      <List size={14} />
-                    </button>
-                    <button type="button" className="p-1.5 text-gray-600 hover:bg-gray-200 rounded" title="Numbered List">
-                      <ListOrdered size={14} />
-                    </button>
-                  </div>
-
-                  <textarea
-                    rows={6}
-                    value={form.description}
-                    onChange={e => updateField('description', e.target.value)}
-                    placeholder="Provide a comprehensive summary of the role, responsibilities, and team context..."
-                    className="w-full p-4 text-sm text-gray-800 placeholder:text-gray-400 border-0 focus:outline-none resize-y leading-relaxed"
-                  />
-                </div>
+                <RichTextEditor
+                  content={form.description}
+                  onChange={val => updateField('description', val)}
+                  placeholder="Provide a comprehensive summary of the role, responsibilities, and team context..."
+                  minHeight="160px"
+                />
               </div>
 
               {/* Card 2: Qualification / Requirements */}
@@ -1212,68 +1208,24 @@ export function VacancyEditorPage() {
                   Qualification & Requirements <span className="text-red-500">*</span>
                 </h2>
 
-                <div className="rounded-xl border border-gray-200 overflow-hidden focus-within:ring-2 focus-within:ring-[#5C00DD] focus-within:border-transparent">
-                  <div className="bg-gray-50 border-b border-gray-200 px-3 py-2 flex items-center gap-1">
-                    <button type="button" className="p-1.5 text-gray-600 hover:bg-gray-200 rounded" title="Bold">
-                      <Bold size={14} />
-                    </button>
-                    <button type="button" className="p-1.5 text-gray-600 hover:bg-gray-200 rounded" title="Italic">
-                      <Italic size={14} />
-                    </button>
-                    <button type="button" className="p-1.5 text-gray-600 hover:bg-gray-200 rounded" title="Underline">
-                      <Underline size={14} />
-                    </button>
-                    <span className="w-px h-4 bg-gray-300 mx-1" />
-                    <button type="button" className="p-1.5 text-gray-600 hover:bg-gray-200 rounded" title="Bullet List">
-                      <List size={14} />
-                    </button>
-                    <button type="button" className="p-1.5 text-gray-600 hover:bg-gray-200 rounded" title="Numbered List">
-                      <ListOrdered size={14} />
-                    </button>
-                  </div>
-
-                  <textarea
-                    rows={5}
-                    value={form.requirements}
-                    onChange={e => updateField('requirements', e.target.value)}
-                    placeholder="• Minimum 5 years of relevant industry experience&#10;• Proven leadership track record..."
-                    className="w-full p-4 text-sm text-gray-800 placeholder:text-gray-400 border-0 focus:outline-none resize-y leading-relaxed"
-                  />
-                </div>
+                <RichTextEditor
+                  content={form.requirements}
+                  onChange={val => updateField('requirements', val)}
+                  placeholder="• Minimum 5 years of relevant industry experience&#10;• Proven leadership track record..."
+                  minHeight="140px"
+                />
               </div>
 
               {/* Card 3: Benefit */}
               <div className="bg-white rounded-2xl border border-gray-100 p-6 shadow-xs flex flex-col gap-3">
                 <h2 className="text-sm font-bold text-gray-900">Benefits & Perks</h2>
 
-                <div className="rounded-xl border border-gray-200 overflow-hidden focus-within:ring-2 focus-within:ring-[#5C00DD] focus-within:border-transparent">
-                  <div className="bg-gray-50 border-b border-gray-200 px-3 py-2 flex items-center gap-1">
-                    <button type="button" className="p-1.5 text-gray-600 hover:bg-gray-200 rounded" title="Bold">
-                      <Bold size={14} />
-                    </button>
-                    <button type="button" className="p-1.5 text-gray-600 hover:bg-gray-200 rounded" title="Italic">
-                      <Italic size={14} />
-                    </button>
-                    <button type="button" className="p-1.5 text-gray-600 hover:bg-gray-200 rounded" title="Underline">
-                      <Underline size={14} />
-                    </button>
-                    <span className="w-px h-4 bg-gray-300 mx-1" />
-                    <button type="button" className="p-1.5 text-gray-600 hover:bg-gray-200 rounded" title="Bullet List">
-                      <List size={14} />
-                    </button>
-                    <button type="button" className="p-1.5 text-gray-600 hover:bg-gray-200 rounded" title="Numbered List">
-                      <ListOrdered size={14} />
-                    </button>
-                  </div>
-
-                  <textarea
-                    rows={4}
-                    value={form.benefits}
-                    onChange={e => updateField('benefits', e.target.value)}
-                    placeholder="• Comprehensive Health insurance (HMO)&#10;• Hybrid work flexibility&#10;• Annual professional learning budget"
-                    className="w-full p-4 text-sm text-gray-800 placeholder:text-gray-400 border-0 focus:outline-none resize-y leading-relaxed"
-                  />
-                </div>
+                <RichTextEditor
+                  content={form.benefits}
+                  onChange={val => updateField('benefits', val)}
+                  placeholder="• Comprehensive Health insurance (HMO)&#10;• Hybrid work flexibility&#10;• Annual professional learning budget"
+                  minHeight="120px"
+                />
               </div>
             </>
           )}
