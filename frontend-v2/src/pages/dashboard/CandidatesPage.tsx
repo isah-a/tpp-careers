@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   ArrowLeft,
@@ -21,6 +22,16 @@ import type { Application, ApplicationStage } from '../../types'
 interface ApplicationWithMeta extends Application {
   userRating?: number
 }
+
+// Valid recruitment stages supported by public.application_stage enum & transition RPC
+const STAGE_OPTIONS: { stage: ApplicationStage; label: string; dotClass: string }[] = [
+  { stage: 'screening', label: 'Screening', dotClass: 'bg-[#5C00DD]' },
+  { stage: 'review', label: 'Review', dotClass: 'bg-[#BE185D]' },
+  { stage: 'interview', label: 'Interview', dotClass: 'bg-[#C2410C]' },
+  { stage: 'offer', label: 'Offer', dotClass: 'bg-[#059669]' },
+  { stage: 'hired', label: 'Hired', dotClass: 'bg-[#15803D]' },
+  { stage: 'rejected', label: 'Rejected', dotClass: 'bg-[#DC2626]' },
+]
 
 // 10 Mock records strictly matching Figma Jobs.png for visual verification.
 // Restricted to development mode and ONLY loaded when ?fixture=true is explicitly requested.
@@ -196,7 +207,15 @@ export function CandidatesPage() {
   // Tracking in-progress updates
   const [ratingUpdatingId, setRatingUpdatingId] = useState<string | null>(null)
   const [stageUpdatingId, setStageUpdatingId] = useState<string | null>(null)
-  const [activeStageMenuId, setActiveStageMenuId] = useState<string | null>(null)
+
+  // Active stage dropdown state with trigger bounding box (portal-rendered)
+  const [activeStageMenu, setActiveStageMenu] = useState<{
+    id: string
+    currentStage: ApplicationStage | string
+    top: number
+    left: number
+    openUpwards: boolean
+  } | null>(null)
 
   // Load live data from Supabase
   useEffect(() => {
@@ -263,6 +282,46 @@ export function CandidatesPage() {
     }
   }, [isFixtureRequested, session?.user?.id])
 
+  // Dismiss stage menu on click outside, Escape, or window scroll/resize
+  useEffect(() => {
+    if (!activeStageMenu) return
+
+    const handlePointerDown = (e: PointerEvent) => {
+      const target = e.target as HTMLElement | null
+      if (
+        target?.closest('[data-stage-dropdown]') ||
+        target?.closest('[data-stage-trigger]')
+      ) {
+        return
+      }
+      setActiveStageMenu(null)
+    }
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setActiveStageMenu(null)
+      }
+    }
+
+    const handleScrollOrResize = (e: Event) => {
+      const target = e.target as HTMLElement | null
+      if (target?.closest?.('[data-stage-dropdown]')) return
+      setActiveStageMenu(null)
+    }
+
+    document.addEventListener('pointerdown', handlePointerDown)
+    document.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('scroll', handleScrollOrResize, true)
+    window.addEventListener('resize', handleScrollOrResize)
+
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown)
+      document.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('scroll', handleScrollOrResize, true)
+      window.removeEventListener('resize', handleScrollOrResize)
+    }
+  }, [activeStageMenu])
+
   // Filter application rows
   const filteredApplications = useMemo(() => {
     return applications.filter(app => {
@@ -276,7 +335,7 @@ export function CandidatesPage() {
       const matchesStage =
         selectedStage === 'all' ||
         app.stage === selectedStage ||
-        (selectedStage === 'new' && app.stage === 'screening')
+        (selectedStage === 'screening' && app.stage === 'screening')
 
       return matchesSearch && matchesStage
     })
@@ -396,19 +455,59 @@ export function CandidatesPage() {
     }
   }
 
+  // Open stage dropdown anchored to badge button
+  const handleBadgeClick = (
+    e: React.MouseEvent<HTMLButtonElement>,
+    appId: string,
+    currentStage: ApplicationStage | string
+  ) => {
+    e.stopPropagation()
+    if (activeStageMenu?.id === appId) {
+      setActiveStageMenu(null)
+      return
+    }
+
+    const rect = e.currentTarget.getBoundingClientRect()
+    const menuHeight = 265
+    const menuWidth = 190
+
+    // Check if space below viewport is sufficient
+    const spaceBelow = window.innerHeight - rect.bottom
+    const openUpwards = spaceBelow < menuHeight && rect.top > menuHeight
+
+    const top = openUpwards ? Math.max(10, rect.top - menuHeight - 6) : rect.bottom + 6
+    const left = Math.max(10, Math.min(rect.left, window.innerWidth - menuWidth - 10))
+
+    setActiveStageMenu({
+      id: appId,
+      currentStage,
+      top,
+      left,
+      openUpwards,
+    })
+  }
+
   // Candidate pipeline stage transition handler
-  // STRICT REQUIREMENT 2 & 4:
+  // STRICT REQUIREMENT 2, 4, 5:
   // - Applications schema uses 'stage' (public.application_stage enum), NOT 'status'.
   // - Direct updates to applications.stage are restricted by RLS; transitions must call
   //   the existing security-definer RPC 'transition_application_stage'.
-  // - Errors are visibly displayed in actionError and do NOT falsely indicate success.
+  // - Preserves previous stage and surfaces clear user-facing error on failure.
+  // - Updates displayed badge only after successful persistence.
   const handleStageChange = async (applicationId: string, newStage: ApplicationStage) => {
-    setActiveStageMenuId(null)
+    setActiveStageMenu(null)
+
+    const targetApp = applications.find(a => a.id === applicationId)
+    const previousStage = targetApp?.stage
+
+    if (previousStage === newStage) return
 
     if (isUsingFixture) {
       setApplications(prev =>
         prev.map(app => (app.id === applicationId ? { ...app, stage: newStage } : app))
       )
+      setActionSuccess(`[Fixture] Candidate stage updated to ${newStage}.`)
+      setTimeout(() => setActionSuccess(null), 3000)
       return
     }
 
@@ -433,7 +532,7 @@ export function CandidatesPage() {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Transition RPC failed'
       console.error('[CandidatesPage] Stage transition error:', msg)
-      // STRICT REQUIREMENT 4: Display error visibly, do NOT update local state, do NOT falsely show success!
+      // REQUIREMENT 5: Preserve previous stage and show clear user-facing error
       setActionError(`Could not update candidate stage: ${msg}`)
     } finally {
       setStageUpdatingId(null)
@@ -498,11 +597,11 @@ export function CandidatesPage() {
     switch (stage) {
       case 'screening':
         badgeClass = 'bg-[#F3EBFD] text-[#5C00DD] border-[#5C00DD]/20 hover:bg-[#E9DBFC]'
-        label = 'New'
+        label = 'Screening'
         break
       case 'review':
         badgeClass = 'bg-[#FDF2F8] text-[#BE185D] border-[#F472B6]/40 hover:bg-[#FCE7F3]'
-        label = 'Screening'
+        label = 'Review'
         break
       case 'interview':
         badgeClass = 'bg-[#FFF7ED] text-[#C2410C] border-[#FDBA74]/40 hover:bg-[#FFEDD5]'
@@ -511,7 +610,7 @@ export function CandidatesPage() {
       case 'offer':
       case 'hired':
         badgeClass = 'bg-[#F0FDF4] text-[#15803D] border-[#86EFAC]/50 hover:bg-[#DCFCE7]'
-        label = 'Hired'
+        label = stage === 'offer' ? 'Offer' : 'Hired'
         break
       case 'rejected':
       default:
@@ -521,59 +620,31 @@ export function CandidatesPage() {
     }
 
     const isUpdating = stageUpdatingId === appId
-    const isMenuOpen = activeStageMenuId === appId
+    const isMenuOpen = activeStageMenu?.id === appId
 
     return (
-      <div className="relative inline-block text-left">
-        <button
-          type="button"
-          disabled={isUpdating}
-          onClick={() => setActiveStageMenuId(prev => (prev === appId ? null : appId))}
-          title="Click to transition pipeline stage"
-          className={`inline-flex items-center gap-1 px-3 py-0.5 rounded-md text-xs font-medium border transition-colors cursor-pointer ${badgeClass}`}
-        >
-          {isUpdating ? (
-            <Loader2 size={12} className="animate-spin" />
-          ) : (
-            <>
-              <span>{label}</span>
-              <ChevronDown size={11} className="opacity-60" />
-            </>
-          )}
-        </button>
-
-        {isMenuOpen && (
-          <div className="absolute left-0 mt-1 w-40 rounded-xl bg-white shadow-modal border border-gray-100 p-1.5 z-40 animate-in fade-in">
-            <div className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-gray-400 border-b border-gray-100">
-              Change Stage
-            </div>
-            <div className="py-1">
-              {[
-                { stage: 'screening', label: 'New / Screening' },
-                { stage: 'review', label: 'Review' },
-                { stage: 'interview', label: 'Interview' },
-                { stage: 'offer', label: 'Offer' },
-                { stage: 'hired', label: 'Hired' },
-                { stage: 'rejected', label: 'Rejected' },
-              ].map(opt => (
-                <button
-                  key={opt.stage}
-                  type="button"
-                  onClick={() => void handleStageChange(appId, opt.stage as ApplicationStage)}
-                  className={`w-full flex items-center justify-between px-2.5 py-1.5 text-xs rounded-lg transition-colors text-left ${
-                    stage === opt.stage
-                      ? 'bg-[#F3EBFD] text-[#5C00DD] font-semibold'
-                      : 'text-gray-700 hover:bg-gray-50'
-                  }`}
-                >
-                  <span>{opt.label}</span>
-                  {stage === opt.stage && <Check size={12} />}
-                </button>
-              ))}
-            </div>
-          </div>
+      <button
+        type="button"
+        disabled={isUpdating}
+        data-stage-trigger={appId}
+        onClick={e => handleBadgeClick(e, appId, stage)}
+        title="Click to transition pipeline stage"
+        className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium border transition-colors cursor-pointer select-none ${badgeClass} ${
+          isMenuOpen ? 'ring-2 ring-[#5C00DD]/30 shadow-xs' : ''
+        }`}
+      >
+        {isUpdating ? (
+          <Loader2 size={12} className="animate-spin text-current" />
+        ) : (
+          <>
+            <span>{label}</span>
+            <ChevronDown
+              size={11}
+              className={`opacity-60 transition-transform duration-150 ${isMenuOpen ? 'rotate-180' : ''}`}
+            />
+          </>
         )}
-      </div>
+      </button>
     )
   }
 
@@ -736,7 +807,7 @@ export function CandidatesPage() {
               <div className="py-1">
                 {[
                   { value: 'all', label: 'All Stages' },
-                  { value: 'screening', label: 'Screening / New' },
+                  { value: 'screening', label: 'Screening' },
                   { value: 'review', label: 'Review' },
                   { value: 'interview', label: 'Interview' },
                   { value: 'offer', label: 'Offer' },
@@ -905,7 +976,7 @@ export function CandidatesPage() {
                         </div>
                       </td>
 
-                      {/* Status / Stage Badge with Transition Popover */}
+                      {/* Status / Stage Badge with Transition Dropdown Trigger */}
                       <td className="px-6 py-4.5">
                         {renderStatusBadge(row.stage, row.id)}
                       </td>
@@ -1020,6 +1091,56 @@ export function CandidatesPage() {
           </div>
         </div>
       </section>
+
+      {/* Portal-Rendered Recruitment Stage Dropdown Menu */}
+      {/* Renders in document.body to break free from table overflow-hidden and overflow-x-auto */}
+      {typeof document !== 'undefined' &&
+        activeStageMenu &&
+        createPortal(
+          <div
+            data-stage-dropdown
+            style={{
+              position: 'fixed',
+              top: `${activeStageMenu.top}px`,
+              left: `${activeStageMenu.left}px`,
+              zIndex: 9999,
+            }}
+            className="w-[190px] rounded-xl bg-white shadow-[0_10px_25px_-5px_rgba(0,0,0,0.15),0_8px_10px_-6px_rgba(0,0,0,0.1)] border border-gray-100 p-1.5 animate-in fade-in zoom-in-95 select-none"
+          >
+            <div className="px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-gray-400 border-b border-gray-100 flex items-center justify-between">
+              <span>Change Stage</span>
+              <span className="text-[10px] text-gray-300 font-normal">Esc</span>
+            </div>
+            <div className="py-1 flex flex-col gap-0.5">
+              {STAGE_OPTIONS.map(opt => {
+                const isSelected = activeStageMenu.currentStage === opt.stage
+                return (
+                  <button
+                    key={opt.stage}
+                    type="button"
+                    disabled={stageUpdatingId === activeStageMenu.id}
+                    onClick={e => {
+                      e.stopPropagation()
+                      void handleStageChange(activeStageMenu.id, opt.stage)
+                    }}
+                    className={`w-full flex items-center justify-between px-2.5 py-1.5 text-xs rounded-lg transition-colors text-left cursor-pointer ${
+                      isSelected
+                        ? 'bg-[#F3EBFD] text-[#5C00DD] font-semibold'
+                        : 'text-gray-700 hover:bg-gray-50'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className={`w-2 h-2 rounded-full ${opt.dotClass}`} />
+                      <span>{opt.label}</span>
+                    </div>
+                    {isSelected && <Check size={14} className="text-[#5C00DD]" />}
+                  </button>
+                )
+              })}
+            </div>
+          </div>,
+          document.body
+        )}
     </div>
   )
 }
