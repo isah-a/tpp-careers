@@ -1,12 +1,14 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
+  AlertCircle,
   ArrowLeft,
   Bold,
   Briefcase,
   Calendar,
   Check,
   ChevronDown,
+  ChevronUp,
   CircleAlert,
   Clock,
   Copy,
@@ -18,7 +20,9 @@ import {
   List,
   ListOrdered,
   Loader2,
+  Lock,
   MapPin,
+  Pencil,
   Plus,
   Save,
   Trash2,
@@ -96,14 +100,18 @@ export function VacancyEditorPage() {
   // Form & questions state
   const [form, setForm] = useState<FormState>(INITIAL_FORM)
   const [questions, setQuestions] = useState<EditableQuestion[]>([])
+  const [deletedQuestionIds, setDeletedQuestionIds] = useState<string[]>([])
+  const [referencedQuestionIds, setReferencedQuestionIds] = useState<Set<string>>(new Set())
+  const [applicationCount, setApplicationCount] = useState<number>(0)
   const [skillInput, setSkillInput] = useState<string>('')
 
-  // New question draft modal / popover state
+  // Reusable Question Form state (for both Add and Edit)
   const [isAddingQuestion, setIsAddingQuestion] = useState<boolean>(false)
-  const [newQuestionLabel, setNewQuestionLabel] = useState<string>('')
-  const [newQuestionType, setNewQuestionType] = useState<QuestionType>('yes_no')
-  const [newQuestionOptions, setNewQuestionOptions] = useState<string>('')
-  const [newQuestionRequired, setNewQuestionRequired] = useState<boolean>(true)
+  const [editingIndex, setEditingIndex] = useState<number | null>(null)
+  const [formQuestionLabel, setFormQuestionLabel] = useState<string>('')
+  const [formQuestionType, setFormQuestionType] = useState<QuestionType>('yes_no')
+  const [formQuestionOptions, setFormQuestionOptions] = useState<string>('')
+  const [formQuestionRequired, setFormQuestionRequired] = useState<boolean>(true)
 
   // Status & loading states
   const [loading, setLoading] = useState<boolean>(Boolean(id || searchParams.get('template')))
@@ -122,14 +130,80 @@ export function VacancyEditorPage() {
         setLoading(true)
         setErrorMessage(null)
 
-        try {
-          const { data, error } = await supabase
-            .from('vacancies')
-            .select('*, screening_questions(*)')
-            .eq('id', id)
-            .single()
+        const isFixture = searchParams.get('fixture') === 'true' || id.startsWith('v-')
 
-          if (error) throw error
+        if (isFixture) {
+          // Dev fixture sample data
+          setForm({
+            ...INITIAL_FORM,
+            title: id === 'v-1' ? 'Senior Project Manager' : 'Brand, Communications & Marketing Manager',
+            slug: id === 'v-1' ? 'senior-project-manager' : 'brand-communications-marketing-manager',
+            client_name: 'TPP Hire',
+            department: id === 'v-1' ? 'Operations' : 'Marketing',
+            location: 'Lagos, Nigeria',
+            employment_type: 'Full-time',
+            workplace_type: id === 'v-1' ? 'hybrid' : 'onsite',
+            description: id === 'v-1'
+              ? 'Lead strategic operational initiatives across client engagements.'
+              : 'Architect brand messaging, PR campaigns, and omni-channel growth.',
+            requirements: 'Minimum 5 years of relevant industry leadership experience.',
+            status: 'active',
+          })
+
+          const sampleQuestions: EditableQuestion[] = [
+            {
+              id: `${id}-q1`,
+              label: 'Are you currently authorized to work in this location?',
+              type: 'yes_no',
+              required: true,
+              options: [],
+              sort_order: 0,
+            },
+            {
+              id: `${id}-q2`,
+              label: 'How many years of relevant professional experience do you have?',
+              type: 'text',
+              required: true,
+              options: [],
+              sort_order: 1,
+            },
+            {
+              id: `${id}-q3`,
+              label: 'What is your preferred work arrangement?',
+              type: 'single_select',
+              required: false,
+              options: ['On-site in Lagos', 'Hybrid (2 days remote)', 'Fully remote'],
+              sort_order: 2,
+            },
+          ]
+          setQuestions(sampleQuestions)
+
+          if (id === 'v-1') {
+            setApplicationCount(10)
+            setReferencedQuestionIds(new Set([`${id}-q1`, `${id}-q2`]))
+          } else {
+            setApplicationCount(0)
+            setReferencedQuestionIds(new Set())
+          }
+          setLoading(false)
+          return
+        }
+
+        try {
+          const [vacRes, appRes] = await Promise.all([
+            supabase
+              .from('vacancies')
+              .select('*, screening_questions(*)')
+              .eq('id', id)
+              .single(),
+            supabase
+              .from('applications')
+              .select('id, answers')
+              .eq('vacancy_id', id),
+          ])
+
+          if (vacRes.error) throw vacRes.error
+          const data = vacRes.data
 
           if (isMounted && data) {
             setForm({
@@ -163,6 +237,21 @@ export function VacancyEditorPage() {
                 options_input: Array.isArray(q.options) ? q.options.join(', ') : '',
               }))
             )
+
+            if (appRes.data) {
+              setApplicationCount(appRes.data.length)
+              const referenced = new Set<string>()
+              for (const app of appRes.data) {
+                if (app.answers && typeof app.answers === 'object') {
+                  for (const [key, val] of Object.entries(app.answers)) {
+                    if (val !== undefined && val !== null && String(val).trim() !== '') {
+                      referenced.add(key)
+                    }
+                  }
+                }
+              }
+              setReferencedQuestionIds(referenced)
+            }
           }
         } catch (err: unknown) {
           if (isMounted) {
@@ -277,31 +366,148 @@ export function VacancyEditorPage() {
     }))
   }
 
-  // Add question to list
-  const handleConfirmAddQuestion = () => {
-    if (!newQuestionLabel.trim()) return
+  // Check if a question is referenced by submitted applications
+  const isQuestionReferenced = (qId?: string) => Boolean(qId && referencedQuestionIds.has(qId))
 
-    const parsedOpts =
-      newQuestionType === 'single_select' ? parseQuestionOptions(newQuestionOptions) : []
+  // Open the editor for an existing question
+  const handleStartEditQuestion = (idx: number) => {
+    const q = questions[idx]
+    if (!q) return
 
-    const q: EditableQuestion = {
-      label: newQuestionLabel.trim(),
-      type: newQuestionType,
-      required: newQuestionRequired,
-      options: parsedOpts,
-      options_input: newQuestionOptions,
-      sort_order: questions.length,
-    }
-
-    setQuestions(prev => [...prev, q])
-    setNewQuestionLabel('')
-    setNewQuestionOptions('')
-    setNewQuestionType('yes_no')
+    setEditingIndex(idx)
     setIsAddingQuestion(false)
+    setFormQuestionLabel(q.label)
+    setFormQuestionType(q.type)
+    setFormQuestionRequired(q.required)
+    setFormQuestionOptions(
+      q.options_input ?? (Array.isArray(q.options) ? q.options.join(', ') : '')
+    )
+    setErrorMessage(null)
   }
 
+  // Open the form to add a new question
+  const handleStartAddQuestion = () => {
+    setEditingIndex(null)
+    setIsAddingQuestion(true)
+    setFormQuestionLabel('')
+    setFormQuestionType('yes_no')
+    setFormQuestionRequired(true)
+    setFormQuestionOptions('')
+    setErrorMessage(null)
+  }
+
+  // Cancel edit or add
+  const handleCancelQuestionForm = () => {
+    setEditingIndex(null)
+    setIsAddingQuestion(false)
+    setFormQuestionLabel('')
+    setFormQuestionType('yes_no')
+    setFormQuestionRequired(true)
+    setFormQuestionOptions('')
+  }
+
+  // Save changes from the question form (handles both Add and Edit)
+  const handleSaveQuestionForm = () => {
+    if (!formQuestionLabel.trim()) {
+      setErrorMessage('Screening question prompt cannot be empty.')
+      return
+    }
+
+    const parsedOpts =
+      formQuestionType === 'single_select' ? parseQuestionOptions(formQuestionOptions) : []
+
+    if (formQuestionType === 'single_select' && parsedOpts.length < 2) {
+      setErrorMessage('Single-select questions must contain at least two comma-separated options.')
+      return
+    }
+
+    if (editingIndex !== null) {
+      const currentQ = questions[editingIndex]
+      const isRef = isQuestionReferenced(currentQ?.id)
+
+      // Substantive edit protection for questions referenced by submitted applications
+      if (isRef) {
+        if (
+          formQuestionLabel.trim() !== currentQ.label.trim() ||
+          formQuestionType !== currentQ.type
+        ) {
+          setErrorMessage(
+            'Substantive edits to question prompt or type are locked because candidates have already submitted applications answering this question.'
+          )
+          return
+        }
+      }
+
+      setQuestions(prev =>
+        prev.map((item, i) =>
+          i === editingIndex
+            ? {
+                ...item,
+                label: formQuestionLabel.trim(),
+                type: formQuestionType,
+                required: formQuestionRequired,
+                options: parsedOpts,
+                options_input: formQuestionOptions,
+              }
+            : item
+        )
+      )
+    } else {
+      // Adding a new question
+      const newQ: EditableQuestion = {
+        label: formQuestionLabel.trim(),
+        type: formQuestionType,
+        required: formQuestionRequired,
+        options: parsedOpts,
+        options_input: formQuestionOptions,
+        sort_order: questions.length,
+      }
+      setQuestions(prev => [...prev, newQ])
+    }
+
+    handleCancelQuestionForm()
+  }
+
+  // Delete question
   const handleRemoveQuestion = (idx: number) => {
-    setQuestions(prev => prev.filter((_, i) => i !== idx))
+    const q = questions[idx]
+    if (q.id && isQuestionReferenced(q.id)) {
+      setErrorMessage(
+        `Cannot delete question "${q.label}": candidate applications have already been submitted referencing this question.`
+      )
+      return
+    }
+
+    if (q.id) {
+      setDeletedQuestionIds(prev => [...prev, q.id!])
+    }
+
+    setQuestions(prev =>
+      prev.filter((_, i) => i !== idx).map((item, i) => ({ ...item, sort_order: i }))
+    )
+
+    if (editingIndex === idx) {
+      handleCancelQuestionForm()
+    } else if (editingIndex !== null && editingIndex > idx) {
+      setEditingIndex(editingIndex - 1)
+    }
+  }
+
+  // Reordering helper
+  const handleMoveQuestion = (fromIdx: number, toIdx: number) => {
+    if (toIdx < 0 || toIdx >= questions.length) return
+    setQuestions(prev => {
+      const copy = [...prev]
+      const [moved] = copy.splice(fromIdx, 1)
+      copy.splice(toIdx, 0, moved)
+      return copy.map((item, i) => ({ ...item, sort_order: i }))
+    })
+
+    if (editingIndex === fromIdx) {
+      setEditingIndex(toIdx)
+    } else if (editingIndex === toIdx) {
+      setEditingIndex(fromIdx)
+    }
   }
 
   // Format payload for validation and database
@@ -360,10 +566,17 @@ export function VacancyEditorPage() {
 
     // Verify screening questions
     const readyQuestions = questions.map((item, idx) => ({
+      id: item.id,
+      vacancy_id: id || item.vacancy_id,
       label: item.label.trim(),
       type: item.type,
       required: item.required,
-      options: item.type === 'single_select' ? parseQuestionOptions(item.options_input || '') : [],
+      options:
+        item.type === 'single_select'
+          ? parseQuestionOptions(
+              item.options_input ?? (Array.isArray(item.options) ? item.options.join(', ') : '')
+            )
+          : [],
       sort_order: idx,
     }))
 
@@ -375,8 +588,8 @@ export function VacancyEditorPage() {
       setActiveTab('screening')
       setErrorMessage(
         !invalidQuestion.label
-          ? 'Each screening question must have a label.'
-          : 'Multiple-choice questions must have at least 2 comma-separated options.'
+          ? 'Each screening question must have a non-empty question prompt.'
+          : 'Single-select screening questions must include at least two options.'
       )
       return
     }
@@ -384,10 +597,24 @@ export function VacancyEditorPage() {
     setSaving(true)
 
     try {
+      const isFixture = searchParams.get('fixture') === 'true' || id?.startsWith('v-')
+
+      if (isFixture) {
+        setSuccessNotice(
+          targetStatus === 'active'
+            ? '[Fixture] Job vacancy successfully published to the live portal!'
+            : '[Fixture] Job draft successfully saved.'
+        )
+        setTimeout(() => {
+          navigate('/dashboard/jobs?fixture=true')
+        }, 1200)
+        return
+      }
+
       let vacancyId = id
 
       if (id) {
-        // Update existing vacancy
+        // 1. Update existing vacancy
         const { error: updateErr } = await supabase
           .from('vacancies')
           .update(validationResult.data)
@@ -395,8 +622,72 @@ export function VacancyEditorPage() {
 
         if (updateErr) throw updateErr
 
-        // Replace screening questions
-        await supabase.from('screening_questions').delete().eq('vacancy_id', id)
+        // 2. Handle screening questions:
+        // A. Delete removed questions
+        if (deletedQuestionIds.length > 0) {
+          const blockedDel = deletedQuestionIds.find(delId => referencedQuestionIds.has(delId))
+          if (blockedDel) {
+            throw new Error('Cannot delete questions that have submitted candidate applications.')
+          }
+
+          const { error: delErr } = await supabase
+            .from('screening_questions')
+            .delete()
+            .in('id', deletedQuestionIds)
+            .eq('vacancy_id', id)
+
+          if (delErr) throw delErr
+        }
+
+        // B. Separate remaining questions: toUpdate (have existing DB ID) vs toInsert (newly added)
+        const toUpdate = readyQuestions.filter(q => q.id)
+        const toInsert = readyQuestions.filter(q => !q.id)
+
+        // C. Update existing questions by ID
+        // Offset sort_orders to temporary non-colliding values first if multiple to avoid unique(vacancy_id, sort_order) conflicts
+        if (toUpdate.length > 1) {
+          for (let i = 0; i < toUpdate.length; i++) {
+            const { error: tempErr } = await supabase
+              .from('screening_questions')
+              .update({ sort_order: 10000 + i })
+              .eq('id', toUpdate[i].id)
+
+            if (tempErr) throw tempErr
+          }
+        }
+
+        for (const q of toUpdate) {
+          const { error: updErr } = await supabase
+            .from('screening_questions')
+            .update({
+              label: q.label,
+              type: q.type,
+              required: q.required,
+              options: q.options,
+              sort_order: q.sort_order,
+            })
+            .eq('id', q.id)
+
+          if (updErr) throw updErr
+        }
+
+        // D. Insert newly added questions
+        if (toInsert.length > 0) {
+          const { error: insErr } = await supabase
+            .from('screening_questions')
+            .insert(
+              toInsert.map(q => ({
+                vacancy_id: id,
+                label: q.label,
+                type: q.type,
+                required: q.required,
+                options: q.options,
+                sort_order: q.sort_order,
+              }))
+            )
+
+          if (insErr) throw insErr
+        }
       } else {
         // Insert new vacancy
         const { data: inserted, error: insertErr } = await supabase
@@ -407,26 +698,27 @@ export function VacancyEditorPage() {
 
         if (insertErr) throw insertErr
         vacancyId = inserted.id
+
+        // Insert questions
+        if (readyQuestions.length > 0 && vacancyId) {
+          const { error: qErr } = await supabase
+            .from('screening_questions')
+            .insert(
+              readyQuestions.map(q => ({
+                vacancy_id: vacancyId,
+                label: q.label,
+                type: q.type,
+                required: q.required,
+                options: q.options,
+                sort_order: q.sort_order,
+              }))
+            )
+
+          if (qErr) throw qErr
+        }
       }
 
-      // Insert screening questions
-      if (readyQuestions.length && vacancyId) {
-        const questionsPayload = readyQuestions.map(q => ({
-          vacancy_id: vacancyId,
-          label: q.label,
-          type: q.type,
-          required: q.required,
-          options: q.options,
-          sort_order: q.sort_order,
-        }))
-
-        const { error: qErr } = await supabase
-          .from('screening_questions')
-          .insert(questionsPayload)
-
-        if (qErr) throw qErr
-      }
-
+      setDeletedQuestionIds([])
       setSuccessNotice(
         targetStatus === 'active'
           ? 'Job vacancy successfully published to the live portal!'
@@ -990,40 +1282,65 @@ export function VacancyEditorPage() {
           {activeTab === 'screening' && (
             <div className="bg-white rounded-2xl border border-gray-100 p-6 shadow-xs flex flex-col gap-4">
               <div className="flex items-center justify-between pb-3 border-b border-gray-100">
-                <h2 className="text-sm font-bold text-gray-900">
-                  Screening questions ({questions.length})
-                </h2>
-                <button
-                  type="button"
-                  onClick={() => setIsAddingQuestion(true)}
-                  className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#5C00DD] text-white hover:bg-[#4A00B4] transition-colors cursor-pointer"
-                >
-                  <Plus size={14} />
-                  <span>Add Question</span>
-                </button>
+                <div>
+                  <h2 className="text-sm font-bold text-gray-900">
+                    Screening questions ({questions.length})
+                  </h2>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    Configure qualification questions presented to candidates during submission.
+                  </p>
+                </div>
+                {!isAddingQuestion && editingIndex === null && (
+                  <button
+                    type="button"
+                    onClick={handleStartAddQuestion}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-[#5C00DD] text-white hover:bg-[#4A00B4] transition-colors cursor-pointer active:scale-95 shadow-xs"
+                  >
+                    <Plus size={14} />
+                    <span>Add Question</span>
+                  </button>
+                )}
               </div>
 
-              {/* Add Question Inline Card */}
+              {/* Add Question Inline Form */}
               {isAddingQuestion && (
-                <div className="p-4 rounded-xl border border-[#5C00DD]/30 bg-[#F3EBFD]/30 flex flex-col gap-3 animate-in fade-in">
-                  <span className="text-xs font-bold text-[#5C00DD]">New Screening Question</span>
-                  <input
-                    type="text"
-                    value={newQuestionLabel}
-                    onChange={e => setNewQuestionLabel(e.target.value)}
-                    placeholder="e.g. Do you have a valid certification from the Chartered Institute?"
-                    className="w-full px-3 py-2 text-xs bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-[#5C00DD]"
-                  />
+                <div className="p-4 rounded-xl border border-[#5C00DD]/40 bg-[#F3EBFD]/20 shadow-xs flex flex-col gap-3 animate-in fade-in duration-150">
+                  <div className="flex items-center justify-between pb-1 border-b border-purple-100">
+                    <span className="text-xs font-bold text-[#5C00DD] uppercase tracking-wider">
+                      New Screening Question
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleCancelQuestionForm}
+                      className="text-gray-400 hover:text-gray-600 cursor-pointer p-1 rounded-md"
+                      title="Cancel"
+                    >
+                      <X size={15} />
+                    </button>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-gray-700 mb-1">
+                      Question Prompt <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={formQuestionLabel}
+                      onChange={e => setFormQuestionLabel(e.target.value)}
+                      placeholder="e.g. Do you have a valid certification from the Chartered Institute?"
+                      className="w-full px-3 py-2 text-xs bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-[#5C00DD] text-gray-900 placeholder:text-gray-400"
+                    />
+                  </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-[11px] font-semibold text-gray-600 mb-1">
+                      <label className="block text-[11px] font-semibold text-gray-700 mb-1">
                         Question Type
                       </label>
                       <select
-                        value={newQuestionType}
-                        onChange={e => setNewQuestionType(e.target.value as QuestionType)}
-                        className="w-full px-3 py-1.5 text-xs bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-[#5C00DD]"
+                        value={formQuestionType}
+                        onChange={e => setFormQuestionType(e.target.value as QuestionType)}
+                        className="w-full px-3 py-1.5 text-xs bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-[#5C00DD] text-gray-800"
                       >
                         <option value="yes_no">Yes / No</option>
                         <option value="text">Open ended (Text)</option>
@@ -1032,11 +1349,11 @@ export function VacancyEditorPage() {
                     </div>
 
                     <div className="flex items-center pt-5">
-                      <label className="flex items-center gap-2 text-xs text-gray-700 cursor-pointer">
+                      <label className="flex items-center gap-2 text-xs text-gray-700 cursor-pointer select-none">
                         <input
                           type="checkbox"
-                          checked={newQuestionRequired}
-                          onChange={e => setNewQuestionRequired(e.target.checked)}
+                          checked={formQuestionRequired}
+                          onChange={e => setFormQuestionRequired(e.target.checked)}
                           className="rounded border-gray-300 text-[#5C00DD] focus:ring-[#5C00DD]"
                         />
                         <span>Candidate response is required</span>
@@ -1044,17 +1361,17 @@ export function VacancyEditorPage() {
                     </div>
                   </div>
 
-                  {newQuestionType === 'single_select' && (
+                  {formQuestionType === 'single_select' && (
                     <div>
-                      <label className="block text-[11px] font-semibold text-gray-600 mb-1">
-                        Options (separated by commas)
+                      <label className="block text-[11px] font-semibold text-gray-700 mb-1">
+                        Options (separated by commas) <span className="text-red-500">*</span>
                       </label>
                       <input
                         type="text"
-                        value={newQuestionOptions}
-                        onChange={e => setNewQuestionOptions(e.target.value)}
+                        value={formQuestionOptions}
+                        onChange={e => setFormQuestionOptions(e.target.value)}
                         placeholder="Option A, Option B, Option C"
-                        className="w-full px-3 py-1.5 text-xs bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-[#5C00DD]"
+                        className="w-full px-3 py-1.5 text-xs bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-[#5C00DD] text-gray-900 placeholder:text-gray-400"
                       />
                     </div>
                   )}
@@ -1062,16 +1379,16 @@ export function VacancyEditorPage() {
                   <div className="flex items-center justify-end gap-2 pt-2 border-t border-purple-100">
                     <button
                       type="button"
-                      onClick={() => setIsAddingQuestion(false)}
-                      className="px-3 py-1.5 text-xs text-gray-600 hover:text-gray-900"
+                      onClick={handleCancelQuestionForm}
+                      className="px-3 py-1.5 text-xs text-gray-600 hover:text-gray-900 cursor-pointer"
                     >
                       Cancel
                     </button>
                     <button
                       type="button"
-                      onClick={handleConfirmAddQuestion}
-                      disabled={!newQuestionLabel.trim()}
-                      className="px-4 py-1.5 rounded-lg bg-[#5C00DD] text-white text-xs font-semibold hover:bg-[#4A00B4] disabled:opacity-50"
+                      onClick={handleSaveQuestionForm}
+                      disabled={!formQuestionLabel.trim()}
+                      className="px-4 py-1.5 rounded-lg bg-[#5C00DD] text-white text-xs font-semibold hover:bg-[#4A00B4] disabled:opacity-50 cursor-pointer transition-colors shadow-xs"
                     >
                       Add Question
                     </button>
@@ -1089,69 +1406,296 @@ export function VacancyEditorPage() {
                     </p>
                   </div>
                 ) : (
-                  questions.map((q, idx) => (
-                    <div
-                      key={q.id || idx}
-                      className="rounded-xl border border-gray-200 bg-white p-4 shadow-2xs flex items-start gap-3 hover:border-gray-300 transition-colors"
-                    >
-                      <div className="text-gray-300 pt-1 cursor-grab">
-                        <GripVertical size={16} />
-                      </div>
+                  questions.map((q, idx) => {
+                    const isEditingThis = editingIndex === idx
+                    const isRef = isQuestionReferenced(q.id)
 
-                      <div className="flex-1">
-                        <p className="text-sm font-semibold text-gray-900 leading-snug">
-                          {q.label}
-                        </p>
+                    if (isEditingThis) {
+                      return (
+                        <div
+                          key={q.id || `edit-${idx}`}
+                          className="p-4 rounded-xl border border-[#5C00DD]/40 bg-[#F3EBFD]/20 shadow-xs flex flex-col gap-3 animate-in fade-in duration-150"
+                        >
+                          <div className="flex items-center justify-between pb-1 border-b border-purple-100">
+                            <div className="flex items-center gap-2">
+                              <Pencil size={14} className="text-[#5C00DD]" />
+                              <span className="text-xs font-bold text-[#5C00DD] uppercase tracking-wider">
+                                Edit Screening Question #{idx + 1}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={handleCancelQuestionForm}
+                              className="text-gray-400 hover:text-gray-600 cursor-pointer p-1 rounded-md"
+                              title="Cancel editing"
+                            >
+                              <X size={15} />
+                            </button>
+                          </div>
 
-                        <div className="flex items-center gap-2 mt-2">
-                          <span
-                            className={`px-2 py-0.5 rounded text-[11px] font-semibold border ${
-                              q.type === 'yes_no'
-                                ? 'bg-[#F3EBFD] text-[#5C00DD] border-[#5C00DD]/20'
-                                : q.type === 'text'
-                                ? 'bg-[#FDF2F8] text-[#BE185D] border-[#F472B6]/40'
-                                : 'bg-[#FFF7ED] text-[#C2410C] border-[#FDBA74]/40'
-                            }`}
-                          >
-                            {q.type === 'yes_no'
-                              ? 'Yes/No'
-                              : q.type === 'text'
-                              ? 'Open ended'
-                              : 'Multiple choice'}
+                          {/* Historical response warning if referenced */}
+                          {isRef && (
+                            <div className="rounded-xl bg-amber-50 border border-amber-200/90 p-3.5 text-xs text-amber-900 flex items-start gap-2.5">
+                              <AlertCircle size={17} className="text-amber-600 shrink-0 mt-0.5" />
+                              <div>
+                                <p className="font-semibold text-amber-900">Historical Candidate Response Protection</p>
+                                <p className="mt-0.5 text-amber-700 leading-relaxed">
+                                  Candidate applications have already been submitted answering this question. Question text and question type cannot be substantively altered to preserve historical application records.
+                                </p>
+                              </div>
+                            </div>
+                          )}
+
+                          <div>
+                            <label className="block text-[11px] font-semibold text-gray-700 mb-1">
+                              Question Prompt {isRef && <span className="text-amber-600 font-normal">(Locked to preserve responses)</span>}
+                            </label>
+                            <input
+                              type="text"
+                              value={formQuestionLabel}
+                              onChange={e => setFormQuestionLabel(e.target.value)}
+                              disabled={isRef}
+                              placeholder="e.g. Do you have a valid certification from the Chartered Institute?"
+                              className={`w-full px-3 py-2 text-xs border rounded-lg focus:outline-none focus:ring-1 focus:ring-[#5C00DD] ${
+                                isRef
+                                  ? 'bg-gray-100 border-gray-200 text-gray-600 cursor-not-allowed'
+                                  : 'bg-white border-gray-200 text-gray-900'
+                              }`}
+                            />
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div>
+                              <label className="block text-[11px] font-semibold text-gray-700 mb-1">
+                                Question Type {isRef && <span className="text-amber-600 font-normal">(Locked)</span>}
+                              </label>
+                              <select
+                                value={formQuestionType}
+                                onChange={e => setFormQuestionType(e.target.value as QuestionType)}
+                                disabled={isRef}
+                                className={`w-full px-3 py-1.5 text-xs border rounded-lg focus:outline-none focus:ring-1 focus:ring-[#5C00DD] ${
+                                  isRef
+                                    ? 'bg-gray-100 border-gray-200 text-gray-600 cursor-not-allowed'
+                                    : 'bg-white border-gray-200 text-gray-900'
+                                }`}
+                              >
+                                <option value="yes_no">Yes / No</option>
+                                <option value="text">Open ended (Text)</option>
+                                <option value="single_select">Multiple choice (Single select)</option>
+                              </select>
+                            </div>
+
+                            <div className="flex items-center pt-5">
+                              <label className="flex items-center gap-2 text-xs text-gray-700 cursor-pointer select-none">
+                                <input
+                                  type="checkbox"
+                                  checked={formQuestionRequired}
+                                  onChange={e => setFormQuestionRequired(e.target.checked)}
+                                  className="rounded border-gray-300 text-[#5C00DD] focus:ring-[#5C00DD]"
+                                />
+                                <span>Candidate response is required</span>
+                              </label>
+                            </div>
+                          </div>
+
+                          {formQuestionType === 'single_select' && (
+                            <div>
+                              <label className="block text-[11px] font-semibold text-gray-700 mb-1">
+                                Options (separated by commas) {isRef && <span className="text-amber-600 font-normal">(Locked)</span>}
+                              </label>
+                              <input
+                                type="text"
+                                value={formQuestionOptions}
+                                onChange={e => setFormQuestionOptions(e.target.value)}
+                                disabled={isRef}
+                                placeholder="Option A, Option B, Option C"
+                                className={`w-full px-3 py-1.5 text-xs border rounded-lg focus:outline-none focus:ring-1 focus:ring-[#5C00DD] ${
+                                  isRef
+                                    ? 'bg-gray-100 border-gray-200 text-gray-600 cursor-not-allowed'
+                                    : 'bg-white border-gray-200 text-gray-900'
+                                }`}
+                              />
+                            </div>
+                          )}
+
+                          {/* Ordering controls within the editor */}
+                          <div className="flex items-center justify-between text-xs text-gray-500 pt-2 border-t border-purple-100/60">
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-gray-500">Position:</span>
+                              <span className="font-semibold text-gray-800">
+                                Question {idx + 1} of {questions.length}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                disabled={idx === 0}
+                                onClick={() => handleMoveQuestion(idx, idx - 1)}
+                                className="px-2.5 py-1 rounded-lg border border-gray-200 text-[11px] font-medium text-gray-700 hover:bg-white disabled:opacity-30 disabled:pointer-events-none cursor-pointer flex items-center gap-1 transition-colors"
+                                title="Move earlier"
+                              >
+                                <ChevronUp size={13} />
+                                <span>Move up</span>
+                              </button>
+                              <button
+                                type="button"
+                                disabled={idx === questions.length - 1}
+                                onClick={() => handleMoveQuestion(idx, idx + 1)}
+                                className="px-2.5 py-1 rounded-lg border border-gray-200 text-[11px] font-medium text-gray-700 hover:bg-white disabled:opacity-30 disabled:pointer-events-none cursor-pointer flex items-center gap-1 transition-colors"
+                                title="Move down"
+                              >
+                                <ChevronDown size={13} />
+                                <span>Move down</span>
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center justify-end gap-2 pt-2 border-t border-purple-100/60">
+                            <button
+                              type="button"
+                              onClick={handleCancelQuestionForm}
+                              className="px-3 py-1.5 text-xs text-gray-600 hover:text-gray-900 cursor-pointer"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleSaveQuestionForm}
+                              disabled={!formQuestionLabel.trim()}
+                              className="px-4 py-1.5 rounded-lg bg-[#5C00DD] text-white text-xs font-semibold hover:bg-[#4A00B4] disabled:opacity-50 cursor-pointer transition-colors shadow-xs"
+                            >
+                              Update Question
+                            </button>
+                          </div>
+                        </div>
+                      )
+                    }
+
+                    return (
+                      <div
+                        key={q.id || idx}
+                        onClick={() => handleStartEditQuestion(idx)}
+                        className="rounded-xl border border-gray-200 bg-white p-4 shadow-2xs flex items-start gap-3 hover:border-[#5C00DD]/40 hover:bg-[#F3EBFD]/5 transition-all cursor-pointer group"
+                      >
+                        {/* Drag Handle & Ordering Arrows */}
+                        <div
+                          className="flex items-center gap-1 text-gray-300 pt-0.5"
+                          onClick={e => e.stopPropagation()}
+                        >
+                          <span className="cursor-grab text-gray-300 group-hover:text-gray-400">
+                            <GripVertical size={16} />
                           </span>
+                          <div className="flex flex-col gap-0.5 ml-0.5">
+                            <button
+                              type="button"
+                              disabled={idx === 0}
+                              onClick={() => handleMoveQuestion(idx, idx - 1)}
+                              className="text-gray-300 hover:text-[#5C00DD] disabled:opacity-15 cursor-pointer p-0.5"
+                              title="Move earlier"
+                            >
+                              <ChevronUp size={13} />
+                            </button>
+                            <button
+                              type="button"
+                              disabled={idx === questions.length - 1}
+                              onClick={() => handleMoveQuestion(idx, idx + 1)}
+                              className="text-gray-300 hover:text-[#5C00DD] disabled:opacity-15 cursor-pointer p-0.5"
+                              title="Move later"
+                            >
+                              <ChevronDown size={13} />
+                            </button>
+                          </div>
+                        </div>
 
-                          {q.required && (
-                            <span className="text-[10px] uppercase font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
-                              Required
-                            </span>
-                          )}
+                        {/* Question details */}
+                        <div className="flex-1">
+                          <p className="text-sm font-semibold text-gray-900 leading-snug group-hover:text-[#5C00DD] transition-colors">
+                            {q.label}
+                          </p>
 
-                          {q.type === 'single_select' && q.options && q.options.length > 0 && (
-                            <span className="text-xs text-gray-500">
-                              ({q.options.join(', ')})
+                          <div className="flex flex-wrap items-center gap-2 mt-2">
+                            <span
+                              className={`px-2 py-0.5 rounded text-[11px] font-semibold border ${
+                                q.type === 'yes_no'
+                                  ? 'bg-[#F3EBFD] text-[#5C00DD] border-[#5C00DD]/20'
+                                  : q.type === 'text'
+                                  ? 'bg-[#FDF2F8] text-[#BE185D] border-[#F472B6]/40'
+                                  : 'bg-[#FFF7ED] text-[#C2410C] border-[#FDBA74]/40'
+                              }`}
+                            >
+                              {q.type === 'yes_no'
+                                ? 'Yes/No'
+                                : q.type === 'text'
+                                ? 'Open ended'
+                                : 'Multiple choice'}
                             </span>
-                          )}
+
+                            {q.required && (
+                              <span className="text-[10px] uppercase font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                                Required
+                              </span>
+                            )}
+
+                            {isRef && (
+                              <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-amber-50 text-amber-800 border border-amber-200 inline-flex items-center gap-1">
+                                <Lock size={11} />
+                                <span>Locked · responses submitted</span>
+                              </span>
+                            )}
+
+                            {q.type === 'single_select' && q.options && q.options.length > 0 && (
+                              <span className="text-xs text-gray-500">
+                                ({q.options.join(', ')})
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Actions: Edit and Delete buttons */}
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            type="button"
+                            onClick={e => {
+                              e.stopPropagation()
+                              handleStartEditQuestion(idx)
+                            }}
+                            className="text-gray-400 hover:text-[#5C00DD] hover:bg-[#F3EBFD] p-1.5 rounded-lg transition-colors cursor-pointer"
+                            title="Edit question"
+                          >
+                            <Pencil size={15} />
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isRef}
+                            onClick={e => {
+                              e.stopPropagation()
+                              handleRemoveQuestion(idx)
+                            }}
+                            className={`p-1.5 rounded-lg transition-colors ${
+                              isRef
+                                ? 'text-gray-300 cursor-not-allowed opacity-40'
+                                : 'text-gray-400 hover:text-red-600 hover:bg-red-50 cursor-pointer'
+                            }`}
+                            title={
+                              isRef
+                                ? 'Cannot delete question with submitted applicant responses'
+                                : 'Delete question'
+                            }
+                          >
+                            <Trash2 size={15} />
+                          </button>
                         </div>
                       </div>
-
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveQuestion(idx)}
-                        className="text-gray-400 hover:text-red-600 p-1.5 rounded transition-colors"
-                        title="Delete question"
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                  ))
+                    )
+                  })
                 )}
               </div>
 
               {/* Add more questions button matching Jobs-3.png */}
-              {!isAddingQuestion && (
+              {!isAddingQuestion && editingIndex === null && (
                 <button
                   type="button"
-                  onClick={() => setIsAddingQuestion(true)}
+                  onClick={handleStartAddQuestion}
                   className="w-full py-3 rounded-xl border border-gray-200 text-xs font-semibold text-gray-700 hover:bg-gray-50 flex items-center justify-center gap-1.5 transition-colors cursor-pointer mt-2"
                 >
                   <Plus size={15} />
