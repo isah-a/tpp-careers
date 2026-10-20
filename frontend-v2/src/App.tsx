@@ -62,7 +62,7 @@ export default function App() {
           <Route path="vacancies" element={<VacanciesPage />} />
           <Route path="vacancies/new" element={<VacancyEditorPage />} />
           <Route path="vacancies/:id" element={<VacancyEditorPage />} />
-          <Route path="jobs" element={<CandidatesPage />} />
+          <Route path="jobs" element={<VacanciesPage />} />
           <Route path="jobs/new" element={<VacancyEditorPage />} />
           <Route path="jobs/:id" element={<VacancyEditorPage />} />
 
