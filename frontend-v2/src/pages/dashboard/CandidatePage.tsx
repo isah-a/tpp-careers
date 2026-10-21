@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useCallback } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   ArrowLeft,
@@ -15,10 +15,20 @@ import {
   CircleAlert,
   Info,
   X,
+  Calendar,
+  Clock,
+  Video,
+  Phone,
+  MapPin,
+  ExternalLink,
+  Plus,
+  History,
 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../context/AuthContext'
-import type { Application, ApplicationNote, ApplicationReview, ApplicationStage, ScreeningQuestion } from '../../types'
+import { ScheduleInterviewModal } from '../../components/dashboard/ScheduleInterviewModal'
+import { CancelInterviewModal } from '../../components/dashboard/CancelInterviewModal'
+import type { Application, ApplicationNote, ApplicationReview, ApplicationStage, ScreeningQuestion, Interview, InterviewHistory } from '../../types'
 
 interface CandidateDetail extends Omit<Application, 'vacancies'> {
   vacancies?: {
@@ -119,8 +129,16 @@ export function CandidatePage() {
   const [cvSignedUrl, setCvSignedUrl] = useState<string | null>(null)
   const [cvLoading, setCvLoading] = useState<boolean>(false)
 
-  // Tab navigation: 'profile' | 'qa' | 'notes'
-  const [activeTab, setActiveTab] = useState<'profile' | 'qa' | 'notes'>('profile')
+  // Tab navigation: 'profile' | 'qa' | 'notes' | 'interviews'
+  const [activeTab, setActiveTab] = useState<'profile' | 'qa' | 'notes' | 'interviews'>('profile')
+
+  // Interview scheduling state
+  const [interviews, setInterviews] = useState<Interview[]>([])
+  const [loadingInterviews, setLoadingInterviews] = useState<boolean>(false)
+  const [scheduleModalOpen, setScheduleModalOpen] = useState<boolean>(false)
+  const [selectedInterviewForReschedule, setSelectedInterviewForReschedule] = useState<Interview | null>(null)
+  const [selectedInterviewForCancel, setSelectedInterviewForCancel] = useState<Interview | null>(null)
+  const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null)
 
   // Note composition state
   const [newNoteBody, setNewNoteBody] = useState<string>('')
@@ -131,6 +149,58 @@ export function CandidatePage() {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [actionSuccess, setActionSuccess] = useState<string | null>(null)
+
+  const loadCandidateInterviews = useCallback(async (appId: string) => {
+    setLoadingInterviews(true)
+    try {
+      const { data, error } = await supabase
+        .from('interviews')
+        .select(`
+          id,
+          application_id,
+          scheduled_at,
+          duration_minutes,
+          timezone,
+          format,
+          location_or_link,
+          notes,
+          status,
+          cancellation_reason,
+          created_by,
+          updated_by,
+          created_at,
+          updated_at,
+          interview_history (
+            id,
+            interview_id,
+            action,
+            scheduled_at,
+            duration_minutes,
+            timezone,
+            format,
+            location_or_link,
+            notes,
+            status,
+            cancellation_reason,
+            changed_by,
+            changed_at,
+            recruiter:recruiters!changed_by (
+              display_name
+            )
+          )
+        `)
+        .eq('application_id', appId)
+        .order('scheduled_at', { ascending: false })
+
+      if (!error && data) {
+        setInterviews(data as unknown as Interview[])
+      }
+    } catch (err) {
+      console.warn('[CandidatePage] Load candidate interviews error:', err)
+    } finally {
+      setLoadingInterviews(false)
+    }
+  }, [])
 
   // Load candidate details, sibling IDs, reviews, notes, and screening questions
   useEffect(() => {
@@ -167,6 +237,11 @@ export function CandidatePage() {
 
         const typedCandidate = appData as unknown as CandidateDetail
         setCandidate(typedCandidate)
+
+        // Query interviews
+        if (applicationId) {
+          void loadCandidateInterviews(applicationId)
+        }
 
         // Query reviews for this application
         const { data: revData } = await supabase
@@ -490,6 +565,21 @@ export function CandidatePage() {
     }
   }
 
+  // Active / Upcoming interview helper
+  const activeInterview = useMemo(() => {
+    return interviews.find(
+      i => (i.status === 'scheduled' || i.status === 'rescheduled') && new Date(i.scheduled_at).getTime() >= Date.now() - 3600000
+    )
+  }, [interviews])
+
+  const upcomingInterviews = useMemo(() => {
+    return interviews.filter(i => i.status === 'scheduled' || i.status === 'rescheduled')
+  }, [interviews])
+
+  const pastOrCancelledInterviews = useMemo(() => {
+    return interviews.filter(i => i.status === 'completed' || i.status === 'cancelled')
+  }, [interviews])
+
   // Active stage details
   const activeStageConfig =
     STAGE_OPTIONS.find(s => s.stage === candidate?.stage) || STAGE_OPTIONS[0]
@@ -711,6 +801,36 @@ export function CandidatePage() {
               })}
             </div>
           </div>
+
+          {/* Interview Action & Indicator */}
+          <div className="ml-auto flex items-center gap-2.5">
+            {activeInterview && (
+              <button
+                type="button"
+                onClick={() => setActiveTab('interviews')}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-purple-200 bg-[#F3EBFD] text-xs font-semibold text-[#5C00DD] hover:bg-[#EAE4FC] transition-colors cursor-pointer"
+                title="View scheduled interview appointment"
+              >
+                <Calendar size={13} />
+                <span>
+                  Interview: {new Date(activeInterview.scheduled_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}{' '}
+                  · {new Date(activeInterview.scheduled_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
+                </span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedInterviewForReschedule(null)
+                setScheduleModalOpen(true)
+              }}
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-[#5C00DD] hover:bg-[#4A00B4] text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer"
+            >
+              <Calendar size={14} />
+              <span>Schedule Interview</span>
+            </button>
+          </div>
         </div>
       </header>
 
@@ -764,6 +884,28 @@ export function CandidatePage() {
               </span>
             )}
             {activeTab === 'notes' && (
+              <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#5C00DD] rounded-t-full" />
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('interviews')}
+            className={`pb-3.5 relative transition-colors cursor-pointer ${
+              activeTab === 'interviews'
+                ? 'text-[#5C00DD] font-bold'
+                : 'text-gray-500 hover:text-gray-800'
+            }`}
+          >
+            <div className="flex items-center gap-1.5">
+              <span>Interviews</span>
+              {interviews.length > 0 && (
+                <span className="text-xs px-1.5 py-0.5 rounded-full bg-[#EAE4FC] text-[#5C00DD] font-semibold">
+                  {interviews.length}
+                </span>
+              )}
+            </div>
+            {activeTab === 'interviews' && (
               <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#5C00DD] rounded-t-full" />
             )}
           </button>
@@ -1128,7 +1270,440 @@ export function CandidatePage() {
             </div>
           </div>
         )}
+
+        {/* Tab 4: Interviews View */}
+        {activeTab === 'interviews' && (
+          <div className="p-8 max-w-4xl flex flex-col gap-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-gray-100">
+              <div>
+                <h2 className="text-base font-bold text-gray-900">Candidate Interview Appointments</h2>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  Internal interview schedule, location details, and tamper-proof audit trail.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedInterviewForReschedule(null)
+                  setScheduleModalOpen(true)
+                }}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-[#5C00DD] hover:bg-[#4A00B4] text-white text-xs font-semibold rounded-xl shadow-xs transition-colors cursor-pointer self-start sm:self-auto"
+              >
+                <Plus size={15} strokeWidth={2.5} />
+                <span>Schedule Interview</span>
+              </button>
+            </div>
+
+            {/* Scope & Integration Disclaimer */}
+            <div className="rounded-xl bg-[#F5F7FD] border border-[#E8EDF7] p-4 text-xs text-gray-700 flex items-start gap-3">
+              <Info size={18} className="text-[#5C00DD] shrink-0 mt-0.5" />
+              <div>
+                <span className="font-semibold text-gray-900">Internal Appointment Tracking:</span>{' '}
+                <span>
+                  This interview schedule is maintained internally within the OnCulture recruitment system.
+                  External calendar synchronization (Google Calendar / Outlook) and candidate invitation emails
+                  are separate external services that are not automatically dispatched.
+                </span>
+              </div>
+            </div>
+
+            {loadingInterviews ? (
+              <div className="p-12 text-center text-gray-400">
+                <Loader2 size={24} className="animate-spin text-[#5C00DD] mx-auto mb-2" />
+                <p className="text-xs font-medium">Loading interview appointments...</p>
+              </div>
+            ) : interviews.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50/50 p-12 text-center flex flex-col items-center justify-center">
+                <div className="w-12 h-12 rounded-2xl bg-[#EAE4FC] text-[#5C00DD] flex items-center justify-center mb-3">
+                  <Calendar size={24} />
+                </div>
+                <h3 className="text-sm font-bold text-gray-900">No interviews scheduled yet</h3>
+                <p className="text-xs text-gray-500 mt-1 max-w-sm">
+                  Schedule an initial screening or technical round with {candidate.full_name} to track interview progress.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedInterviewForReschedule(null)
+                    setScheduleModalOpen(true)
+                  }}
+                  className="mt-4 inline-flex items-center gap-2 px-4 py-2 bg-[#5C00DD] hover:bg-[#4A00B4] text-white text-xs font-semibold rounded-xl shadow-xs transition-colors cursor-pointer"
+                >
+                  <Plus size={15} strokeWidth={2.5} />
+                  <span>Schedule First Interview</span>
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-6">
+                {/* Active & Upcoming Interviews */}
+                {upcomingInterviews.length > 0 && (
+                  <div className="space-y-4">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-gray-400">
+                      Active & Upcoming Appointments ({upcomingInterviews.length})
+                    </h3>
+
+                    {upcomingInterviews.map(interview => {
+                      const dt = new Date(interview.scheduled_at)
+                      const isExpanded = expandedHistoryId === interview.id
+                      const history = interview.interview_history || []
+
+                      return (
+                        <div
+                          key={interview.id}
+                          className="rounded-2xl border border-purple-100 bg-white p-5 shadow-xs flex flex-col gap-4 transition-all hover:border-[#5C00DD]/30"
+                        >
+                          {/* Top Row: Date, Status, Duration */}
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-gray-100">
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 rounded-xl bg-[#EAE4FC] text-[#5C00DD] flex items-center justify-center shrink-0">
+                                <Calendar size={20} />
+                              </div>
+                              <div>
+                                <div className="text-sm font-bold text-gray-900">
+                                  {dt.toLocaleDateString('en-GB', {
+                                    weekday: 'long',
+                                    day: 'numeric',
+                                    month: 'long',
+                                    year: 'numeric',
+                                  })}
+                                </div>
+                                <div className="text-xs text-gray-500 flex items-center gap-2 mt-0.5">
+                                  <span className="font-semibold text-gray-700">
+                                    {dt.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
+                                  </span>
+                                  <span>·</span>
+                                  <span>{interview.duration_minutes} minutes</span>
+                                  <span>·</span>
+                                  <span className="text-gray-400">{interview.timezone}</span>
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-2 self-start sm:self-auto">
+                              <span
+                                className={`text-[11px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full border ${
+                                  interview.status === 'rescheduled'
+                                    ? 'bg-amber-50 text-amber-700 border-amber-200'
+                                    : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                }`}
+                              >
+                                {interview.status}
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Middle Row: Format & Meeting Details */}
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+                            <div className="rounded-xl bg-gray-50/80 border border-gray-100 p-3.5">
+                              <span className="font-semibold uppercase tracking-wider text-[10px] text-gray-400 block mb-1">
+                                Format & Coordinates
+                              </span>
+                              <div className="flex items-center gap-2 mt-1">
+                                {interview.format === 'online' ? (
+                                  <>
+                                    <Video size={15} className="text-[#5C00DD] shrink-0" />
+                                    <span className="font-medium text-gray-800">Online Video Call</span>
+                                  </>
+                                ) : interview.format === 'phone' ? (
+                                  <>
+                                    <Phone size={15} className="text-blue-600 shrink-0" />
+                                    <span className="font-medium text-gray-800">Phone Call</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <MapPin size={15} className="text-emerald-600 shrink-0" />
+                                    <span className="font-medium text-gray-800">In-Person Meeting</span>
+                                  </>
+                                )}
+                              </div>
+                              <div className="mt-2 text-gray-700 truncate">
+                                {interview.format === 'online' && interview.location_or_link.startsWith('http') ? (
+                                  <a
+                                    href={interview.location_or_link}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-[#5C00DD] hover:underline inline-flex items-center gap-1 font-medium"
+                                  >
+                                    <span>{interview.location_or_link}</span>
+                                    <ExternalLink size={12} />
+                                  </a>
+                                ) : (
+                                  <span className="font-mono text-gray-900 bg-white px-2 py-1 rounded border border-gray-200 block truncate">
+                                    {interview.location_or_link}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Internal Notes */}
+                            <div className="rounded-xl bg-gray-50/80 border border-gray-100 p-3.5">
+                              <span className="font-semibold uppercase tracking-wider text-[10px] text-gray-400 block mb-1">
+                                Interview Notes
+                              </span>
+                              <p className="text-gray-700 mt-1 whitespace-pre-wrap leading-relaxed">
+                                {interview.notes || (
+                                  <span className="text-gray-400 italic">No notes provided.</span>
+                                )}
+                              </p>
+                            </div>
+                          </div>
+
+                          {/* Bottom Row: Actions & Audit History Toggle */}
+                          <div className="pt-2 flex flex-wrap items-center justify-between gap-3">
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedInterviewForReschedule(interview)
+                                  setScheduleModalOpen(true)
+                                }}
+                                className="px-3.5 py-1.5 rounded-lg border border-gray-200 bg-white text-xs font-semibold text-gray-700 hover:bg-gray-50 shadow-2xs transition-colors cursor-pointer"
+                              >
+                                Reschedule
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setSelectedInterviewForCancel(interview)}
+                                className="px-3.5 py-1.5 rounded-lg border border-red-200 bg-white text-xs font-semibold text-red-600 hover:bg-red-50 shadow-2xs transition-colors cursor-pointer"
+                              >
+                                Cancel Interview
+                              </button>
+                            </div>
+
+                            {history.length > 0 && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setExpandedHistoryId(isExpanded ? null : interview.id)
+                                }
+                                className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-gray-800 transition-colors cursor-pointer"
+                              >
+                                <History size={13} />
+                                <span>
+                                  {isExpanded ? 'Hide' : 'View'} Audit Trail ({history.length})
+                                </span>
+                                <ChevronDown
+                                  size={13}
+                                  className={`transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+                                />
+                              </button>
+                            )}
+                          </div>
+
+                          {/* Collapsible Tamper-Proof Audit History */}
+                          {isExpanded && history.length > 0 && (
+                            <div className="mt-2 pt-3 border-t border-gray-100 bg-[#F9FAFB] rounded-xl p-4">
+                              <div className="text-[11px] font-bold uppercase tracking-wider text-gray-500 mb-3 flex items-center gap-1.5">
+                                <History size={13} className="text-[#5C00DD]" />
+                                <span>Immutable Audit History</span>
+                              </div>
+                              <div className="space-y-3">
+                                {history.map((item: InterviewHistory) => {
+                                  const author = item.recruiter?.display_name || 'Recruiter'
+                                  const changeTime = new Date(item.changed_at).toLocaleString('en-GB', {
+                                    day: '2-digit',
+                                    month: 'short',
+                                    year: 'numeric',
+                                    hour: '2-digit',
+                                    minute: '2-digit',
+                                  })
+
+                                  return (
+                                    <div
+                                      key={item.id}
+                                      className="text-xs text-gray-700 flex items-start gap-2.5 pb-2 border-b border-gray-200/60 last:border-0 last:pb-0"
+                                    >
+                                      <span
+                                        className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase shrink-0 mt-0.5 ${
+                                          item.action === 'created'
+                                            ? 'bg-blue-100 text-blue-800'
+                                            : item.action === 'rescheduled'
+                                            ? 'bg-amber-100 text-amber-800'
+                                            : item.action === 'cancelled'
+                                            ? 'bg-red-100 text-red-800'
+                                            : 'bg-gray-100 text-gray-800'
+                                        }`}
+                                      >
+                                        {item.action}
+                                      </span>
+                                      <div className="flex-1 min-w-0">
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                          <span className="font-semibold text-gray-900">{author}</span>
+                                          <span className="text-gray-400">·</span>
+                                          <time className="text-gray-500 text-[11px]">{changeTime}</time>
+                                        </div>
+                                        {item.cancellation_reason && (
+                                          <p className="mt-0.5 text-red-700 italic">
+                                            Reason: &quot;{item.cancellation_reason}&quot;
+                                          </p>
+                                        )}
+                                        {item.notes && item.action !== 'cancelled' && (
+                                          <p className="mt-0.5 text-gray-600 truncate">
+                                            Notes: {item.notes}
+                                          </p>
+                                        )}
+                                      </div>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+
+                {/* Past & Cancelled Interviews */}
+                {pastOrCancelledInterviews.length > 0 && (
+                  <div className="space-y-4 pt-4 border-t border-gray-100">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-gray-400">
+                      Past & Cancelled Appointments ({pastOrCancelledInterviews.length})
+                    </h3>
+
+                    {pastOrCancelledInterviews.map(interview => {
+                      const dt = new Date(interview.scheduled_at)
+                      const isExpanded = expandedHistoryId === interview.id
+                      const history = interview.interview_history || []
+
+                      return (
+                        <div
+                          key={interview.id}
+                          className="rounded-2xl border border-gray-200 bg-gray-50/60 p-5 shadow-xs flex flex-col gap-3"
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-3">
+                              <div className="w-9 h-9 rounded-xl bg-gray-200/80 text-gray-500 flex items-center justify-center shrink-0">
+                                <Calendar size={18} />
+                              </div>
+                              <div>
+                                <span className="text-sm font-bold text-gray-700 line-through">
+                                  {dt.toLocaleDateString('en-GB', {
+                                    day: 'numeric',
+                                    month: 'short',
+                                    year: 'numeric',
+                                  })}{' '}
+                                  at {dt.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
+                                </span>
+                                <div className="text-xs text-gray-400">
+                                  {interview.format} · {interview.duration_minutes}m · {interview.timezone}
+                                </div>
+                              </div>
+                            </div>
+
+                            <span
+                              className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full border ${
+                                interview.status === 'cancelled'
+                                  ? 'bg-red-50 text-red-700 border-red-200'
+                                  : 'bg-gray-100 text-gray-700 border-gray-300'
+                              }`}
+                            >
+                              {interview.status}
+                            </span>
+                          </div>
+
+                          {interview.cancellation_reason && (
+                            <div className="p-3 rounded-xl bg-red-50 border border-red-100 text-xs text-red-800">
+                              <span className="font-semibold text-red-900">Cancellation Reason: </span>
+                              <span>{interview.cancellation_reason}</span>
+                            </div>
+                          )}
+
+                          {history.length > 0 && (
+                            <div className="pt-1 flex justify-end">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setExpandedHistoryId(isExpanded ? null : interview.id)
+                                }
+                                className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-gray-800 transition-colors cursor-pointer"
+                              >
+                                <History size={12} />
+                                <span>
+                                  {isExpanded ? 'Hide' : 'View'} Audit Trail ({history.length})
+                                </span>
+                                <ChevronDown
+                                  size={12}
+                                  className={`transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+                                />
+                              </button>
+                            </div>
+                          )}
+
+                          {isExpanded && history.length > 0 && (
+                            <div className="mt-1 pt-2 border-t border-gray-200 text-xs space-y-2">
+                              {history.map((item: InterviewHistory) => (
+                                <div key={item.id} className="text-[11px] text-gray-600 flex items-center justify-between">
+                                  <span>
+                                    <strong className="text-gray-800">{item.action}</strong> by{' '}
+                                    {item.recruiter?.display_name || 'Recruiter'}
+                                  </span>
+                                  <time className="text-gray-400">
+                                    {new Date(item.changed_at).toLocaleString('en-GB')}
+                                  </time>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </section>
+
+      {/* Schedule Interview Modal */}
+      <ScheduleInterviewModal
+        isOpen={scheduleModalOpen}
+        onClose={() => {
+          setScheduleModalOpen(false)
+          setSelectedInterviewForReschedule(null)
+        }}
+        candidateId={candidate.id}
+        candidateName={candidate.full_name}
+        candidateRole={candidate.vacancies?.title}
+        existingInterview={selectedInterviewForReschedule}
+        onSuccess={async () => {
+          await loadCandidateInterviews(candidate.id)
+          // Re-fetch application to keep stage badge in sync if stage advance was toggled
+          const { data: appData } = await supabase
+            .from('applications')
+            .select('stage, stage_updated_at')
+            .eq('id', candidate.id)
+            .single()
+
+          if (appData) {
+            setCandidate(prev => (prev ? { ...prev, stage: appData.stage } : null))
+          }
+
+          setActionSuccess(
+            selectedInterviewForReschedule
+              ? 'Interview appointment rescheduled successfully.'
+              : 'Interview appointment scheduled successfully.'
+          )
+          setTimeout(() => setActionSuccess(null), 4000)
+        }}
+      />
+
+      {/* Cancel Interview Modal */}
+      {selectedInterviewForCancel && (
+        <CancelInterviewModal
+          isOpen={Boolean(selectedInterviewForCancel)}
+          onClose={() => setSelectedInterviewForCancel(null)}
+          interview={selectedInterviewForCancel}
+          candidateName={candidate.full_name}
+          onSuccess={async () => {
+            await loadCandidateInterviews(candidate.id)
+            setActionSuccess('Interview appointment cancelled.')
+            setTimeout(() => setActionSuccess(null), 4000)
+          }}
+        />
+      )}
     </div>
   )
 }

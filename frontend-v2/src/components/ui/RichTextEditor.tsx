@@ -86,9 +86,11 @@ export function RichTextEditor({
     },
   })
 
-  // Synchronize when content is updated externally (e.g. after async DB load)
+  // Synchronize when content is updated externally (e.g. after async DB load or template switch)
   useEffect(() => {
-    if (!editor || isUpdatingRef.current) return
+    // If the editor is actively focused or currently performing an internal update,
+    // do not overwrite content to preserve the user's cursor position and active selection.
+    if (!editor || isUpdatingRef.current || editor.isFocused) return
 
     const currentHtml = editor.getHTML()
     const targetHtml = toHtml(content)
@@ -110,6 +112,25 @@ export function RichTextEditor({
     }
   }, [disabled, editor])
 
+  // Helper to execute formatting actions immediately on mousedown
+  // to preserve the active selection without stealing focus
+  const createToolbarAction = (action: (chain: any) => any) => {
+    return {
+      onMouseDown: (e: React.MouseEvent) => {
+        e.preventDefault()
+        if (!editor || disabled) return
+        action(editor.chain()).run()
+      },
+      onClick: (e: React.MouseEvent) => {
+        e.preventDefault()
+        // Handle keyboard navigation (Enter/Space on focused button has detail === 0)
+        if (e.detail === 0 && editor && !disabled) {
+          action(editor.chain()).run()
+        }
+      },
+    }
+  }
+
   return (
     <div
       className={`rounded-xl border border-gray-200 overflow-hidden bg-white focus-within:ring-2 focus-within:ring-[#5C00DD] focus-within:border-transparent transition-all shadow-2xs ${className}`}
@@ -118,8 +139,7 @@ export function RichTextEditor({
       <div className="bg-gray-50 border-b border-gray-200 px-3 py-2 flex items-center gap-1 select-none">
         <button
           type="button"
-          onMouseDown={e => e.preventDefault()}
-          onClick={() => editor?.chain().focus().toggleBold().run()}
+          {...createToolbarAction(chain => chain.toggleBold().focus())}
           disabled={!editor || disabled}
           className={`p-1.5 rounded transition-colors ${
             editor?.isActive('bold')
@@ -133,8 +153,7 @@ export function RichTextEditor({
 
         <button
           type="button"
-          onMouseDown={e => e.preventDefault()}
-          onClick={() => editor?.chain().focus().toggleItalic().run()}
+          {...createToolbarAction(chain => chain.toggleItalic().focus())}
           disabled={!editor || disabled}
           className={`p-1.5 rounded transition-colors ${
             editor?.isActive('italic')
@@ -148,8 +167,7 @@ export function RichTextEditor({
 
         <button
           type="button"
-          onMouseDown={e => e.preventDefault()}
-          onClick={() => editor?.chain().focus().toggleUnderline().run()}
+          {...createToolbarAction(chain => chain.toggleUnderline().focus())}
           disabled={!editor || disabled}
           className={`p-1.5 rounded transition-colors ${
             editor?.isActive('underline')
@@ -165,8 +183,7 @@ export function RichTextEditor({
 
         <button
           type="button"
-          onMouseDown={e => e.preventDefault()}
-          onClick={() => editor?.chain().focus().toggleBulletList().run()}
+          {...createToolbarAction(chain => chain.toggleBulletList().focus())}
           disabled={!editor || disabled}
           className={`p-1.5 rounded transition-colors ${
             editor?.isActive('bulletList')
@@ -180,8 +197,7 @@ export function RichTextEditor({
 
         <button
           type="button"
-          onMouseDown={e => e.preventDefault()}
-          onClick={() => editor?.chain().focus().toggleOrderedList().run()}
+          {...createToolbarAction(chain => chain.toggleOrderedList().focus())}
           disabled={!editor || disabled}
           className={`p-1.5 rounded transition-colors ${
             editor?.isActive('orderedList')
@@ -195,7 +211,15 @@ export function RichTextEditor({
       </div>
 
       {/* Editor Content Area */}
-      <div style={{ minHeight }} className="overflow-y-auto cursor-text" onClick={() => editor?.commands.focus()}>
+      <div
+        style={{ minHeight }}
+        className="overflow-y-auto cursor-text"
+        onClick={e => {
+          if (e.target === e.currentTarget) {
+            editor?.commands.focus('end')
+          }
+        }}
+      >
         <EditorContent editor={editor} />
       </div>
     </div>

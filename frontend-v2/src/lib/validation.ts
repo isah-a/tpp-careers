@@ -61,3 +61,17 @@ export function validateCv(file?: File): string | null {
   ]
   return valid.includes(file.type) ? null : 'Only PDF and DOCX files are accepted'
 }
+
+export const interviewScheduleSchema = z.object({
+  application_id: z.string().uuid('Please select an application'),
+  scheduled_at: z.string().refine(val => {
+    const d = new Date(val)
+    return !isNaN(d.getTime()) && d.getTime() > Date.now() - 300000
+  }, 'Interview must be scheduled for a future date and time'),
+  duration_minutes: z.number().int().min(10, 'Minimum duration is 10 minutes').max(480, 'Maximum duration is 8 hours'),
+  timezone: z.string().min(1, 'Timezone is required'),
+  format: z.enum(['online', 'phone', 'in_person']),
+  location_or_link: z.string().trim().min(1, 'Meeting link or location details are required').max(2000),
+  notes: z.string().max(5000).optional(),
+  advance_stage: z.boolean().optional(),
+})

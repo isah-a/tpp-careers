@@ -10,12 +10,19 @@ import {
   FileText,
   Info,
   X,
-  AlertTriangle
+  Clock,
+  Video,
+  Phone,
+  MapPin,
+  ExternalLink,
+  ChevronRight,
 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../context/AuthContext'
 import { applicationsToCsv } from '../../lib/csv'
-import type { Application, Vacancy } from '../../types'
+import { ScheduleInterviewModal } from '../../components/dashboard/ScheduleInterviewModal'
+import { CancelInterviewModal } from '../../components/dashboard/CancelInterviewModal'
+import type { Application, Interview } from '../../types'
 
 interface DashboardStats {
   activeJobs: number | null
@@ -24,6 +31,8 @@ interface DashboardStats {
   scheduledInterviews: number | null
   interviewStageCount: number | null
 }
+
+type UpcomingInterviewItem = Interview
 
 // Visual test fixture matching Figma Home.png layout values
 const FIGMA_FIXTURE_STATS: DashboardStats = {
@@ -59,6 +68,9 @@ export function DashboardPage() {
 
   // Interactive dialogs & feedback states
   const [scheduleModalOpen, setScheduleModalOpen] = useState(false)
+  const [selectedInterviewForReschedule, setSelectedInterviewForReschedule] = useState<Interview | null>(null)
+  const [selectedInterviewForCancel, setSelectedInterviewForCancel] = useState<Interview | null>(null)
+  const [upcomingInterviews, setUpcomingInterviews] = useState<UpcomingInterviewItem[]>([])
   const [reportExporting, setReportExporting] = useState(false)
   const [reportToast, setReportToast] = useState<{ message: string; isError?: boolean } | null>(null)
 
@@ -95,7 +107,7 @@ export function DashboardPage() {
       setBackendError(null)
 
       try {
-        const [vacanciesRes, applicationsRes] = await Promise.all([
+        const [vacanciesRes, applicationsRes, interviewsCountRes, upcomingRes] = await Promise.all([
           supabase
             .from('vacancies')
             .select('id, status')
@@ -104,6 +116,33 @@ export function DashboardPage() {
             .from('applications')
             .select('id, stage')
             .order('created_at', { ascending: false }),
+          supabase
+            .from('interviews')
+            .select('*', { count: 'exact', head: true })
+            .in('status', ['scheduled', 'rescheduled'])
+            .gte('scheduled_at', new Date().toISOString()),
+          supabase
+            .from('interviews')
+            .select(`
+              id,
+              application_id,
+              scheduled_at,
+              duration_minutes,
+              timezone,
+              format,
+              location_or_link,
+              notes,
+              status,
+              created_by,
+              updated_by,
+              created_at,
+              updated_at,
+              application:applications(id, full_name, email, vacancies(title))
+            `)
+            .in('status', ['scheduled', 'rescheduled'])
+            .gte('scheduled_at', new Date().toISOString())
+            .order('scheduled_at', { ascending: true })
+            .limit(5),
         ])
 
         if (vacanciesRes.error || applicationsRes.error) {
@@ -119,15 +158,20 @@ export function DashboardPage() {
         const totalApps = applications.length
         const interviewCount = applications.filter(a => a.stage === 'interview').length
 
+        // Derive scheduled interviews count: use interviews table count if available, otherwise 0
+        const scheduledCount = !interviewsCountRes.error ? (interviewsCountRes.count ?? 0) : null
+
         if (isMounted) {
           setStats({
             activeJobs: activeCount,
             totalApplicants: totalApps,
             closeJobs: closedCount,
-            // scheduledInterviews: null indicates calendar scheduling data is unavailable in the backend
-            scheduledInterviews: null,
+            scheduledInterviews: scheduledCount,
             interviewStageCount: interviewCount,
           })
+          if (!upcomingRes.error && upcomingRes.data) {
+            setUpcomingInterviews(upcomingRes.data as unknown as UpcomingInterviewItem[])
+          }
           setIsUsingFixture(false)
         }
       } catch (err: unknown) {
@@ -267,15 +311,15 @@ export function DashboardPage() {
           </div>
         </div>
 
-        {/* Card 4: Scheduled Interviews (Accurately distinguishing scheduling data from interview pipeline stage) */}
+        {/* Card 4: Scheduled Interviews */}
         <div className="bg-[#F5F7FD] border border-[#E8EDF7] rounded-2xl p-6 min-h-[120px] flex items-center gap-5 transition-all hover:border-[#5C00DD]/20">
           <div className="w-14 h-14 rounded-2xl bg-[#EAE4FC] flex items-center justify-center shrink-0">
             <Calendar size={26} className="text-[#5C00DD]" strokeWidth={2} />
           </div>
           <div className="min-w-0">
             <div className="text-[32px] font-bold text-gray-900 leading-none tracking-tight flex items-baseline gap-2">
-              <span>{loading ? '—' : isUsingFixture ? stats.scheduledInterviews : '—'}</span>
-              {!isUsingFixture && (
+              <span>{loading ? '—' : isUsingFixture ? stats.scheduledInterviews : (stats.scheduledInterviews ?? 0)}</span>
+              {!isUsingFixture && stats.scheduledInterviews === null && (
                 <span className="text-[10px] font-semibold uppercase tracking-wider text-amber-700 bg-amber-100/80 px-1.5 py-0.5 rounded">
                   Unavailable
                 </span>
@@ -358,65 +402,178 @@ export function DashboardPage() {
         )}
       </section>
 
-      {/* Schedule Interview Modal (Accurately clarifies backend status) */}
-      {scheduleModalOpen && (
-        <div
-          className="fixed inset-0 z-50 bg-gray-900/40 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in"
-          role="dialog"
-          aria-modal="true"
-        >
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-modal border border-gray-100">
-            <div className="flex items-center justify-between pb-3 border-b border-gray-100">
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-lg bg-[#EAE4FC] flex items-center justify-center text-[#5C00DD]">
-                  <Calendar size={18} />
-                </div>
-                <h3 className="text-base font-bold text-gray-900">Interview Scheduling</h3>
+      {/* 4. Upcoming Interviews List (When scheduled interviews exist) */}
+      {!isUsingFixture && upcomingInterviews.length > 0 && (
+        <section className="bg-white rounded-2xl border border-gray-100 p-8 shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
+          <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-lg bg-[#EAE4FC] flex items-center justify-center text-[#5C00DD]">
+                <Calendar size={18} />
               </div>
-              <button
-                onClick={() => setScheduleModalOpen(false)}
-                className="p-1 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 cursor-pointer"
-              >
-                <X size={18} />
-              </button>
+              <h2 className="text-[18px] font-bold text-gray-900 tracking-tight">
+                Upcoming Scheduled Interviews
+              </h2>
             </div>
-
-            <div className="py-4 text-sm text-gray-600 space-y-3">
-              <p>
-                In the working backend data model, candidates are tracked by setting their stage to{' '}
-                <strong className="text-gray-800">&quot;Interview&quot;</strong> in the pipeline.
-              </p>
-              <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-900 space-y-1">
-                <div className="flex items-center gap-1.5 font-semibold text-amber-800">
-                  <AlertTriangle size={14} />
-                  <span>Backend Schema Limitation</span>
-                </div>
-                <p>
-                  Automated calendar synchronization (Google/Outlook) and conflict detection are PRD requirements
-                  that are currently unsupported by the backend database schema.
-                </p>
-              </div>
-            </div>
-
-            <div className="pt-3 border-t border-gray-100 flex justify-end gap-2">
-              <button
-                onClick={() => setScheduleModalOpen(false)}
-                className="px-4 py-2 rounded-lg border border-gray-300 text-sm font-medium text-gray-700 hover:bg-gray-50 cursor-pointer"
-              >
-                Close
-              </button>
-              <button
-                onClick={() => {
-                  setScheduleModalOpen(false)
-                  navigate('/dashboard/applicants')
-                }}
-                className="px-4 py-2 rounded-lg bg-[#5C00DD] text-white text-sm font-medium hover:bg-[#4A00B4] cursor-pointer"
-              >
-                View Candidates in Interview
-              </button>
-            </div>
+            <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-[#EAE4FC] text-[#5C00DD]">
+              {upcomingInterviews.length} upcoming
+            </span>
           </div>
-        </div>
+
+          <div className="divide-y divide-gray-100 border border-gray-100 rounded-xl overflow-hidden">
+            {upcomingInterviews.map(interview => {
+              const candidate = interview.application
+              const candidateName = candidate?.full_name || 'Candidate'
+              const roleTitle = candidate?.vacancies?.title || 'Open Role'
+              const interviewDate = new Date(interview.scheduled_at)
+              const formattedDate = interviewDate.toLocaleDateString('en-GB', {
+                weekday: 'short',
+                day: '2-digit',
+                month: 'short',
+              })
+              const formattedTime = interviewDate.toLocaleTimeString('en-GB', {
+                hour: '2-digit',
+                minute: '2-digit',
+              })
+
+              return (
+                <div
+                  key={interview.id}
+                  className="p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 hover:bg-gray-50/50 transition-colors"
+                >
+                  <div className="flex items-start sm:items-center gap-4 min-w-0">
+                    <div className="w-10 h-10 rounded-xl bg-purple-50 text-[#5C00DD] flex flex-col items-center justify-center shrink-0 border border-purple-100 text-[11px] font-bold leading-tight">
+                      <span>{formattedDate.split(' ')[0]}</span>
+                      <span className="text-gray-900 font-extrabold">{formattedDate.split(' ')[1]}</span>
+                    </div>
+
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <Link
+                          to={`/dashboard/candidates/${interview.application_id}`}
+                          className="font-bold text-sm text-gray-900 hover:text-[#5C00DD] transition-colors truncate"
+                        >
+                          {candidateName}
+                        </Link>
+                        <span className="text-xs text-gray-400">·</span>
+                        <span className="text-xs text-gray-600 truncate">{roleTitle}</span>
+                        {interview.status === 'rescheduled' && (
+                          <span className="text-[10px] uppercase font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">
+                            Rescheduled
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-3 text-xs text-gray-500 mt-1 flex-wrap">
+                        <span className="inline-flex items-center gap-1 font-medium text-gray-700">
+                          <Clock size={13} className="text-gray-400" />
+                          <span>{formattedTime} ({interview.duration_minutes}m)</span>
+                        </span>
+
+                        <span className="inline-flex items-center gap-1">
+                          {interview.format === 'online' ? (
+                            <>
+                              <Video size={13} className="text-[#5C00DD]" />
+                              <span className="font-medium text-gray-700">Online</span>
+                            </>
+                          ) : interview.format === 'phone' ? (
+                            <>
+                              <Phone size={13} className="text-blue-600" />
+                              <span className="font-medium text-gray-700">Phone</span>
+                            </>
+                          ) : (
+                            <>
+                              <MapPin size={13} className="text-emerald-600" />
+                              <span className="font-medium text-gray-700">In-person</span>
+                            </>
+                          )}
+                        </span>
+
+                        {interview.location_or_link && (
+                          <span className="truncate max-w-[220px] text-gray-600">
+                            {interview.format === 'online' && interview.location_or_link.startsWith('http') ? (
+                              <a
+                                href={interview.location_or_link}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-[#5C00DD] hover:underline inline-flex items-center gap-1"
+                              >
+                                <span>Join link</span>
+                                <ExternalLink size={11} />
+                              </a>
+                            ) : (
+                              interview.location_or_link
+                            )}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedInterviewForReschedule(interview)}
+                      className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs font-medium text-gray-700 hover:bg-white hover:border-gray-300 transition-colors shadow-2xs cursor-pointer"
+                    >
+                      Reschedule
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedInterviewForCancel(interview)}
+                      className="px-3 py-1.5 rounded-lg border border-red-200 text-xs font-medium text-red-600 hover:bg-red-50 transition-colors shadow-2xs cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    <Link
+                      to={`/dashboard/candidates/${interview.application_id}`}
+                      className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100"
+                      title="View candidate dossier"
+                    >
+                      <ChevronRight size={16} />
+                    </Link>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </section>
+      )}
+
+      {/* Schedule Interview Modal */}
+      <ScheduleInterviewModal
+        isOpen={scheduleModalOpen || Boolean(selectedInterviewForReschedule)}
+        onClose={() => {
+          setScheduleModalOpen(false)
+          setSelectedInterviewForReschedule(null)
+        }}
+        existingInterview={selectedInterviewForReschedule}
+        onSuccess={() => {
+          void (async () => {
+            // Trigger refresh
+            const query = new URLSearchParams(window.location.search)
+            if (query.get('fixture') !== 'true') {
+              window.location.reload()
+            }
+          })()
+        }}
+      />
+
+      {/* Cancel Interview Modal */}
+      {selectedInterviewForCancel && (
+        <CancelInterviewModal
+          isOpen={Boolean(selectedInterviewForCancel)}
+          onClose={() => setSelectedInterviewForCancel(null)}
+          interview={selectedInterviewForCancel}
+          candidateName={selectedInterviewForCancel.application?.full_name || selectedInterviewForCancel.applications?.full_name}
+          onSuccess={() => {
+            void (async () => {
+              const query = new URLSearchParams(window.location.search)
+              if (query.get('fixture') !== 'true') {
+                window.location.reload()
+              }
+            })()
+          }}
+        />
       )}
     </div>
   )

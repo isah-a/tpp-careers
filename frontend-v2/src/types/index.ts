@@ -109,3 +109,56 @@ export interface StageHistory {
   changed_at: string
   recruiter?: Recruiter
 }
+
+export type InterviewFormat = 'online' | 'phone' | 'in_person'
+export type InterviewStatus = 'scheduled' | 'rescheduled' | 'completed' | 'cancelled'
+
+export interface Interview {
+  id: string
+  application_id: string
+  scheduled_at: string
+  duration_minutes: number
+  timezone: string
+  format: InterviewFormat
+  location_or_link: string
+  notes?: string | null
+  status: InterviewStatus
+  cancellation_reason?: string | null
+  created_by: string
+  updated_by: string
+  created_at: string
+  updated_at: string
+  interview_history?: InterviewHistory[]
+  application?: (Pick<Application, 'id' | 'full_name' | 'email' | 'phone' | 'stage'> & {
+    vacancies?: Pick<Vacancy, 'id' | 'title' | 'slug'> | null
+  }) | null
+  applications?: (Pick<Application, 'id' | 'full_name' | 'email' | 'phone' | 'stage'> & {
+    vacancies?: Pick<Vacancy, 'id' | 'title' | 'slug'> | null
+  }) | null
+}
+
+export interface InterviewHistory {
+  id: string
+  interview_id: string
+  action: 'created' | 'rescheduled' | 'updated' | 'cancelled' | 'completed'
+  scheduled_at: string
+  duration_minutes: number
+  timezone: string
+  format: InterviewFormat
+  location_or_link: string
+  notes?: string | null
+  status: InterviewStatus
+  cancellation_reason?: string | null
+  changed_by: string
+  changed_at: string
+  recruiter?: Recruiter
+}
+
+export interface InterviewOverlapConflict {
+  interview_id: string
+  application_id: string
+  candidate_name: string
+  scheduled_at: string
+  duration_minutes: number
+  format: string
+}
