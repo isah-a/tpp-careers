@@ -16,6 +16,7 @@ const CandidatePage = lazy(() => import('./pages/dashboard/CandidatePage').then(
 const VacanciesPage = lazy(() => import('./pages/dashboard/VacanciesPage').then(m => ({ default: m.VacanciesPage })))
 const VacancyEditorPage = lazy(() => import('./pages/dashboard/VacancyEditorPage').then(m => ({ default: m.VacancyEditorPage })))
 const TemplatesPage = lazy(() => import('./pages/dashboard/TemplatesPage').then(m => ({ default: m.TemplatesPage })))
+const SettingsPage = lazy(() => import('./pages/dashboard/SettingsPage').then(m => ({ default: m.SettingsPage })))
 
 export default function App() {
   return (
@@ -67,22 +68,7 @@ export default function App() {
           <Route path="jobs/:id" element={<VacancyEditorPage />} />
 
           <Route path="templates" element={<TemplatesPage />} />
-          <Route
-            path="settings"
-            element={
-              <div className="p-8">
-                <div className="bg-white rounded-xl border border-gray-200 p-6 max-w-2xl">
-                  <h2 className="text-lg font-bold text-gray-900">Workspace Settings</h2>
-                  <p className="text-sm text-gray-500 mt-1">
-                    Manage team members, email templates, and organization preferences.
-                  </p>
-                  <p className="mt-4 text-xs font-medium text-amber-700 bg-amber-50 p-3 rounded-lg border border-amber-200">
-                    Configuration settings are managed through your Supabase project settings.
-                  </p>
-                </div>
-              </div>
-            }
-          />
+          <Route path="settings" element={<SettingsPage />} />
         </Route>
 
         {/* Catch-all Fallback */}
