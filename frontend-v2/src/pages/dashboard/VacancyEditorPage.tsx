@@ -78,13 +78,6 @@ const INITIAL_FORM: FormState = {
   auto_close_deadline: true,
 }
 
-// Preset skills matching Jobs-1.png
-const DEFAULT_PRESET_SKILLS = [
-  'Ecosystem Thinker',
-  'Strong communication',
-  'High on Execution',
-]
-
 /**
  * Extracts individual perk/benefit items from HTML or plain lines
  * for PostgreSQL text[] storage.
@@ -357,11 +350,18 @@ export function VacancyEditorPage() {
           if (isMounted) setLoading(false)
         }
       } else {
-        // New vacancy: initialize with sample skills from Jobs-1.png
-        setForm(prev => ({
-          ...prev,
-          skills: DEFAULT_PRESET_SKILLS,
-        }))
+        // New vacancy: initialize with clean initial form state and empty skills
+        setForm(INITIAL_FORM)
+        setQuestions([])
+        setDeletedQuestionIds([])
+        setReferencedQuestionIds(new Set())
+        setApplicationCount(0)
+        setSkillInput('')
+        setEditingIndex(null)
+        setIsAddingQuestion(false)
+        setUnauthorized(false)
+        setErrorMessage(null)
+        setSuccessNotice(null)
         setLoading(false)
       }
     }

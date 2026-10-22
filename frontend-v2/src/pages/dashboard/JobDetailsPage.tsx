@@ -1111,19 +1111,20 @@ export function JobDetailsPage() {
           <h2 className="text-sm font-bold text-gray-900 tracking-tight mb-3">
             Skills
           </h2>
-          <div className="flex flex-wrap gap-2">
-            {(currentJob.skills && currentJob.skills.length > 0
-              ? currentJob.skills
-              : ['Ecosystem Thinker', 'Strong communication', 'High on Execution']
-            ).map((skill, idx) => (
-              <span
-                key={idx}
-                className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-medium bg-gray-50 border border-gray-200 text-gray-700"
-              >
-                {skill}
-              </span>
-            ))}
-          </div>
+          {currentJob.skills && currentJob.skills.length > 0 ? (
+            <div className="flex flex-wrap gap-2">
+              {currentJob.skills.map((skill, idx) => (
+                <span
+                  key={idx}
+                  className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-medium bg-gray-50 border border-gray-200 text-gray-700"
+                >
+                  {skill}
+                </span>
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs text-gray-400 italic">No skills specified</p>
+          )}
         </section>
 
         {/* Benefit Card */}
