@@ -709,9 +709,17 @@ export function VacancyEditorPage() {
         }
       } else {
         // Insert new vacancy
+        const insertPayload: Record<string, unknown> = {
+          ...validationResult.data,
+        }
+        if (session?.user?.id) {
+          insertPayload.created_by = session.user.id
+          insertPayload.lead_recruiter_id = session.user.id
+        }
+
         const { data: inserted, error: insertErr } = await supabase
           .from('vacancies')
-          .insert(validationResult.data)
+          .insert(insertPayload)
           .select('id')
           .single()
 

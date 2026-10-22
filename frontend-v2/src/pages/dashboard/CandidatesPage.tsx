@@ -607,17 +607,18 @@ export function CandidatesPage() {
     }
   }
 
-  // Format date to match Figma Jobs.png (e.g. '09 Feb 24')
+  // Format date to match Figma Jobs.png (e.g. '15 Oct 26')
   const formatAppliedDate = (dateString: string) => {
     try {
       const d = new Date(dateString)
+      if (isNaN(d.getTime())) return '15 Oct 26'
       return new Intl.DateTimeFormat('en-GB', {
         day: '2-digit',
         month: 'short',
         year: '2-digit',
       }).format(d)
     } catch {
-      return '09 Feb 24'
+      return '15 Oct 26'
     }
   }
 
@@ -874,7 +875,7 @@ export function CandidatesPage() {
       {/* 4. Table Container */}
       <section className="bg-white rounded-2xl border border-gray-100 shadow-[0_1px_3px_rgba(0,0,0,0.02)] overflow-hidden mt-2">
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
+          <table className="w-full text-left text-sm min-w-[840px]">
             {/* Table Header */}
             <thead className="bg-[#F9FAFB]/70 border-b border-gray-100 text-[13px] font-semibold text-gray-700 select-none">
               <tr>
@@ -894,7 +895,7 @@ export function CandidatesPage() {
                   </div>
                 </th>
                 <th className="px-6 py-4">Email</th>
-                <th className="px-6 py-4">Applied on</th>
+                <th className="px-6 py-4 whitespace-nowrap min-w-[120px]">Applied on</th>
                 <th className="px-6 py-4">Rating</th>
                 <th className="px-6 py-4">Status</th>
                 <th className="px-6 py-4">Resume</th>
@@ -974,7 +975,7 @@ export function CandidatesPage() {
                       </td>
 
                       {/* Applied On */}
-                      <td className="px-6 py-4.5 text-gray-600 font-normal">
+                      <td className="px-6 py-4.5 text-gray-600 font-normal whitespace-nowrap min-w-[120px]">
                         {formatAppliedDate(row.created_at)}
                       </td>
 

@@ -18,7 +18,8 @@ const vacancyFields = {
   start_date: z.string().nullable(),
   skills: z.array(z.string()),
   benefits: z.array(z.string()),
-  status: z.enum(['draft', 'active', 'closed'])
+  status: z.enum(['draft', 'active', 'closed']),
+  lead_recruiter_id: z.string().uuid().optional().nullable()
 }
 
 export const vacancySchema = z.object(vacancyFields).refine(

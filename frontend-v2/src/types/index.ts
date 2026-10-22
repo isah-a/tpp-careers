@@ -33,8 +33,13 @@ export interface Vacancy {
   benefits?: string[]
   responsibilities?: string
   code?: string
+  created_by?: string
+  lead_recruiter_id?: string | null
   recruiter_name?: string
   recruiter_avatar?: string
+  lead_recruiter?: Recruiter | null
+  collaborators?: Recruiter[]
+  vacancy_collaborators?: VacancyCollaborator[]
   status: VacancyStatus
   created_at: string
   updated_at?: string
@@ -45,7 +50,17 @@ export interface Vacancy {
 export interface Recruiter {
   user_id: string
   display_name: string
+  role?: 'recruiter' | 'admin'
   created_at?: string
+}
+
+export interface VacancyCollaborator {
+  id?: string
+  vacancy_id: string
+  recruiter_id: string
+  assigned_by?: string | null
+  assigned_at?: string
+  recruiter?: Recruiter
 }
 
 export interface Application {

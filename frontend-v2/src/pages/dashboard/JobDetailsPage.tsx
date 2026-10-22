@@ -15,9 +15,13 @@ import {
   Briefcase,
   Clock,
   Sparkles,
+  Plus,
+  UserCheck,
+  UserPlus,
 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
-import type { ScreeningQuestion, Vacancy, VacancyStatus } from '../../types'
+import { useAuth } from '../../context/AuthContext'
+import type { Recruiter, ScreeningQuestion, Vacancy, VacancyStatus } from '../../types'
 
 interface VacancyDetailWithCounts extends Vacancy {
   total_applicants?: number
@@ -42,6 +46,19 @@ export const FIGMA_JOB_DETAILS_FIXTURE: VacancyDetailWithCounts = {
   updated_at: '2024-02-09T10:00:00Z',
   start_date: '2024-02-09',
   deadline: '2024-05-09',
+  lead_recruiter_id: 'rec-lead-1',
+  lead_recruiter: {
+    user_id: 'rec-lead-1',
+    display_name: 'Philip Nwachukwu Mathew',
+    role: 'recruiter',
+  },
+  collaborators: [
+    {
+      user_id: 'rec-collab-1',
+      display_name: 'Amara Nwosu',
+      role: 'recruiter',
+    },
+  ],
   recruiter_name: 'Philip Nwachukwu Mathew',
   recruiter_avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=80&h=80&q=80',
   total_applicants: 350,
@@ -68,10 +85,18 @@ export const FIGMA_JOB_DETAILS_FIXTURE: VacancyDetailWithCounts = {
   ],
 }
 
+function getInitials(name?: string): string {
+  if (!name) return 'R'
+  const parts = name.trim().split(/\s+/)
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+}
+
 export function JobDetailsPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
+  const { session, authorized } = useAuth()
 
   const isFixtureRequested =
     searchParams.get('fixture') === 'true' ||
@@ -87,12 +112,76 @@ export function JobDetailsPage() {
   const [actionError, setActionError] = useState<string | null>(null)
   const [isTogglingStatus, setIsTogglingStatus] = useState<boolean>(false)
 
+  // Recruitment Team state
+  const [allRecruiters, setAllRecruiters] = useState<Recruiter[]>([])
+  const [leadRecruiter, setLeadRecruiter] = useState<Recruiter | null>(null)
+  const [collaborators, setCollaborators] = useState<Recruiter[]>([])
+
+  // Modal controls
+  const [showAddCollaboratorModal, setShowAddCollaboratorModal] = useState<boolean>(false)
+  const [showAssignLeadModal, setShowAssignLeadModal] = useState<boolean>(false)
+  const [selectedCollaboratorId, setSelectedCollaboratorId] = useState<string>('')
+  const [selectedLeadId, setSelectedLeadId] = useState<string>('')
+  const [isAddingCollaborator, setIsAddingCollaborator] = useState<boolean>(false)
+  const [isAssigningLead, setIsAssigningLead] = useState<boolean>(false)
+  const [isRemovingCollaborator, setIsRemovingCollaborator] = useState<string | null>(null)
+
+  // Permission evaluation
+  const currentRecruiter = useMemo(() => {
+    if (!session?.user?.id) return null
+    return allRecruiters.find(r => r.user_id === session.user.id) || null
+  }, [allRecruiters, session?.user?.id])
+
+  const isAdmin = currentRecruiter?.role === 'admin'
+  const isLeadRecruiter = Boolean(session?.user?.id && job?.lead_recruiter_id === session.user.id)
+  const isCreator = Boolean(session?.user?.id && job?.created_by === session.user.id)
+  const isUnassigned = !job?.lead_recruiter_id || !leadRecruiter
+
+  // Lead recruiter, creator, workspace admin, or any authorized recruiter if vacancy is unassigned
+  const canManageTeam = Boolean(
+    isFixtureRequested || (authorized && (isAdmin || isLeadRecruiter || isCreator || isUnassigned))
+  )
+
+  // Eligible recruiters to be added as collaborators (excludes current lead & existing collaborators)
+  const availableForCollab = useMemo(() => {
+    const assignedIds = new Set([
+      ...(leadRecruiter ? [leadRecruiter.user_id] : []),
+      ...collaborators.map(c => c.user_id),
+    ])
+    return allRecruiters.filter(r => !assignedIds.has(r.user_id))
+  }, [allRecruiters, leadRecruiter, collaborators])
+
   // Load vacancy details & live applicant counts from local Supabase
   useEffect(() => {
     if (!id) return
 
     if (isFixtureRequested || id?.startsWith('v-')) {
-      setJob(FIGMA_JOB_DETAILS_FIXTURE)
+      const fixtureLead: Recruiter = {
+        user_id: 'rec-lead-1',
+        display_name: 'Philip Nwachukwu Mathew',
+        role: 'recruiter',
+      }
+      const fixtureCollab: Recruiter = {
+        user_id: 'rec-collab-1',
+        display_name: 'Amara Nwosu',
+        role: 'recruiter',
+      }
+      const mockDirectory: Recruiter[] = [
+        fixtureLead,
+        fixtureCollab,
+        { user_id: 'rec-3', display_name: 'Fatima Bello', role: 'recruiter' },
+        { user_id: 'rec-4', display_name: 'Chinedu Eze', role: 'recruiter' },
+        { user_id: 'rec-5', display_name: 'Zainab Al-Mansoor', role: 'admin' },
+      ]
+      setAllRecruiters(mockDirectory)
+      setLeadRecruiter(fixtureLead)
+      setCollaborators([fixtureCollab])
+      setJob({
+        ...FIGMA_JOB_DETAILS_FIXTURE,
+        lead_recruiter_id: fixtureLead.user_id,
+        lead_recruiter: fixtureLead,
+        collaborators: [fixtureCollab],
+      })
       setLoading(false)
       return
     }
@@ -113,7 +202,51 @@ export function JobDetailsPage() {
 
         if (vacancyErr) throw vacancyErr
 
-        // 2. Fetch application counts for this specific vacancy
+        // 2. Fetch full authorized recruiter directory
+        const { data: recruitersData } = await supabase
+          .from('recruiters')
+          .select('user_id, display_name, role')
+          .order('display_name', { ascending: true })
+
+        const recruitersList = recruitersData || []
+        if (isMounted) {
+          setAllRecruiters(recruitersList)
+        }
+
+        // 3. Resolve Lead Recruiter (or null if unassigned)
+        let resolvedLead: Recruiter | null = null
+        if (vacancyData.lead_recruiter_id) {
+          resolvedLead = recruitersList.find(r => r.user_id === vacancyData.lead_recruiter_id) || null
+          if (!resolvedLead) {
+            const { data: singleLead } = await supabase
+              .from('recruiters')
+              .select('user_id, display_name, role')
+              .eq('user_id', vacancyData.lead_recruiter_id)
+              .maybeSingle()
+            if (singleLead) resolvedLead = singleLead
+          }
+        }
+        if (isMounted) {
+          setLeadRecruiter(resolvedLead)
+        }
+
+        // 4. Fetch collaborating recruiters from vacancy_collaborators
+        const { data: collabRows } = await supabase
+          .from('vacancy_collaborators')
+          .select('recruiter_id')
+          .eq('vacancy_id', id)
+
+        if (isMounted) {
+          if (collabRows && collabRows.length > 0) {
+            const collabIds = new Set(collabRows.map(r => r.recruiter_id))
+            const resolvedCollabs = recruitersList.filter(r => collabIds.has(r.user_id))
+            setCollaborators(resolvedCollabs)
+          } else {
+            setCollaborators([])
+          }
+        }
+
+        // 5. Fetch application counts for this specific vacancy
         const { data: applicationsData, error: appErr } = await supabase
           .from('applications')
           .select('id, stage')
@@ -131,6 +264,8 @@ export function JobDetailsPage() {
           setJob({
             ...vacancyData,
             code: vacancyData.code || 'JT-010',
+            lead_recruiter_id: vacancyData.lead_recruiter_id || null,
+            lead_recruiter: resolvedLead,
             total_applicants: total,
             review_count: review,
             interview_count: interview,
@@ -199,6 +334,204 @@ export function JobDetailsPage() {
       setActionError(`Could not update job status: ${msg}`)
     } finally {
       setIsTogglingStatus(false)
+    }
+  }
+
+  // Handle Assign / Change Lead Recruiter
+  const handleAssignLead = async (recruiterId: string) => {
+    if (!job) return
+    setIsAssigningLead(true)
+    setActionError(null)
+
+    const targetRecruiter = allRecruiters.find(r => r.user_id === recruiterId)
+    if (!targetRecruiter) {
+      setActionError('Selected recruiter not found in authorized directory.')
+      setIsAssigningLead(false)
+      return
+    }
+
+    if (isFixtureRequested || id?.startsWith('v-')) {
+      setLeadRecruiter(targetRecruiter)
+      setJob(prev =>
+        prev
+          ? {
+              ...prev,
+              lead_recruiter_id: recruiterId,
+              lead_recruiter: targetRecruiter,
+              recruiter_name: targetRecruiter.display_name,
+            }
+          : prev
+      )
+      setCollaborators(prev => prev.filter(c => c.user_id !== recruiterId))
+      setActionSuccess(`Lead recruiter successfully assigned to ${targetRecruiter.display_name}.`)
+      setShowAssignLeadModal(false)
+      setIsAssigningLead(false)
+      setTimeout(() => setActionSuccess(null), 3500)
+      return
+    }
+
+    try {
+      // 1. Try atomic RPC first
+      const { error: rpcErr } = await supabase.rpc('assign_lead_recruiter', {
+        p_vacancy_id: job.id,
+        p_recruiter_id: recruiterId,
+      })
+
+      if (rpcErr) {
+        // Fallback to direct table update
+        const { error: directErr } = await supabase
+          .from('vacancies')
+          .update({ lead_recruiter_id: recruiterId })
+          .eq('id', job.id)
+
+        if (directErr) throw directErr
+
+        // Remove from collaborators if previously there
+        await supabase
+          .from('vacancy_collaborators')
+          .delete()
+          .eq('vacancy_id', job.id)
+          .eq('recruiter_id', recruiterId)
+      }
+
+      setLeadRecruiter(targetRecruiter)
+      setJob(prev =>
+        prev
+          ? {
+              ...prev,
+              lead_recruiter_id: recruiterId,
+              lead_recruiter: targetRecruiter,
+              recruiter_name: targetRecruiter.display_name,
+            }
+          : prev
+      )
+      setCollaborators(prev => prev.filter(c => c.user_id !== recruiterId))
+      setActionSuccess(`Lead recruiter successfully updated to ${targetRecruiter.display_name}.`)
+      setShowAssignLeadModal(false)
+      setTimeout(() => setActionSuccess(null), 3500)
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to assign lead recruiter'
+      console.error('[JobDetailsPage] Lead recruiter assignment error:', msg)
+      setActionError(`Could not assign lead recruiter: ${msg}`)
+    } finally {
+      setIsAssigningLead(false)
+    }
+  }
+
+  // Handle Add Collaborating Recruiter
+  const handleAddCollaborator = async (recruiterId: string) => {
+    if (!job) return
+    setIsAddingCollaborator(true)
+    setActionError(null)
+
+    const target = allRecruiters.find(r => r.user_id === recruiterId)
+    if (!target) {
+      setActionError('Selected recruiter is not in authorized directory.')
+      setIsAddingCollaborator(false)
+      return
+    }
+
+    // Verify duplicate check
+    if (collaborators.some(c => c.user_id === recruiterId)) {
+      setActionError(`${target.display_name} is already assigned as a collaborator.`)
+      setIsAddingCollaborator(false)
+      return
+    }
+
+    if (leadRecruiter?.user_id === recruiterId) {
+      setActionError(`${target.display_name} is already the lead recruiter for this vacancy.`)
+      setIsAddingCollaborator(false)
+      return
+    }
+
+    if (isFixtureRequested || id?.startsWith('v-')) {
+      setCollaborators(prev => [...prev, target])
+      setActionSuccess(`Added ${target.display_name} as a collaborating recruiter.`)
+      setShowAddCollaboratorModal(false)
+      setSelectedCollaboratorId('')
+      setIsAddingCollaborator(false)
+      setTimeout(() => setActionSuccess(null), 3500)
+      return
+    }
+
+    try {
+      // 1. Try atomic RPC first
+      const { error: rpcErr } = await supabase.rpc('add_vacancy_collaborator', {
+        p_vacancy_id: job.id,
+        p_recruiter_id: recruiterId,
+      })
+
+      if (rpcErr) {
+        // Fallback to direct insert
+        const { error: insertErr } = await supabase
+          .from('vacancy_collaborators')
+          .insert({
+            vacancy_id: job.id,
+            recruiter_id: recruiterId,
+            assigned_by: session?.user?.id,
+          })
+
+        if (insertErr) {
+          if (insertErr.code === '23505') {
+            throw new Error(`${target.display_name} is already assigned to this vacancy.`)
+          }
+          throw insertErr
+        }
+      }
+
+      setCollaborators(prev => [...prev, target])
+      setActionSuccess(`Added ${target.display_name} as a collaborating recruiter.`)
+      setShowAddCollaboratorModal(false)
+      setSelectedCollaboratorId('')
+      setTimeout(() => setActionSuccess(null), 3500)
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to add collaborator'
+      console.error('[JobDetailsPage] Add collaborator error:', msg)
+      setActionError(`Could not add collaborator: ${msg}`)
+    } finally {
+      setIsAddingCollaborator(false)
+    }
+  }
+
+  // Handle Remove Collaborating Recruiter
+  const handleRemoveCollaborator = async (recruiterId: string, recruiterName: string) => {
+    if (!job) return
+    setIsRemovingCollaborator(recruiterId)
+    setActionError(null)
+
+    if (isFixtureRequested || id?.startsWith('v-')) {
+      setCollaborators(prev => prev.filter(c => c.user_id !== recruiterId))
+      setActionSuccess(`Removed ${recruiterName} from collaborating recruiters.`)
+      setIsRemovingCollaborator(null)
+      setTimeout(() => setActionSuccess(null), 3500)
+      return
+    }
+
+    try {
+      const { error: rpcErr } = await supabase.rpc('remove_vacancy_collaborator', {
+        p_vacancy_id: job.id,
+        p_recruiter_id: recruiterId,
+      })
+
+      if (rpcErr) {
+        const { error: deleteErr } = await supabase
+          .from('vacancy_collaborators')
+          .delete()
+          .eq('vacancy_id', job.id)
+          .eq('recruiter_id', recruiterId)
+
+        if (deleteErr) throw deleteErr
+      }
+
+      setCollaborators(prev => prev.filter(c => c.user_id !== recruiterId))
+      setActionSuccess(`Removed ${recruiterName} from collaborating recruiters.`)
+      setTimeout(() => setActionSuccess(null), 3500)
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to remove collaborator'
+      console.error('[JobDetailsPage] Remove collaborator error:', msg)
+      setActionError(`Could not remove collaborator: ${msg}`)
+    } finally {
+      setIsRemovingCollaborator(null)
     }
   }
 
@@ -349,7 +682,7 @@ export function JobDetailsPage() {
 
         {/* Action Buttons: View Applicants, Edit, Close Job */}
         <div className="flex items-center gap-3 self-start md:self-auto shrink-0">
-          {/* "View Applicants" Button -> Navigates to Job-specific Applicants! */}
+          {/* "View Applicants" Button -> Navigates to Job-specific Applicants */}
           <Link
             to={`/dashboard/jobs/${currentJob.id}/applicants${isFixtureRequested ? '?fixture=true' : ''}`}
             className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#5C00DD] hover:bg-[#4900B0] text-white text-sm font-semibold transition-colors shadow-xs cursor-pointer active:scale-[0.99]"
@@ -438,7 +771,7 @@ export function JobDetailsPage() {
         </div>
       </div>
 
-      {/* 4. Two-Column Information Section: Job Information & Recruitment matching Jobs(1).png */}
+      {/* 4. Two-Column Information Section: Job Information & Real Recruitment Team matching Jobs(1).png */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Left: Job Information */}
         <div className="bg-white rounded-2xl border border-gray-100 p-6 shadow-[0_1px_3px_rgba(0,0,0,0.02)] flex flex-col gap-4">
@@ -486,44 +819,182 @@ export function JobDetailsPage() {
           </div>
         </div>
 
-        {/* Right: Recruitment */}
+        {/* Right: Dynamic Recruitment Team Section */}
         <div className="bg-white rounded-2xl border border-gray-100 p-6 shadow-[0_1px_3px_rgba(0,0,0,0.02)] flex flex-col gap-4">
-          <h2 className="text-sm font-bold text-gray-900 tracking-tight">
-            Recruitment
-          </h2>
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-bold text-gray-900 tracking-tight">
+              Recruitment Team
+            </h2>
+            {isAdmin && (
+              <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-purple-50 text-purple-700 border border-purple-100">
+                Admin Access
+              </span>
+            )}
+          </div>
 
           <div className="flex flex-col gap-4 text-xs">
+            {/* 1. Lead Recruiter */}
             <div>
-              <span className="text-gray-400 font-medium block mb-1.5">Recruiter</span>
-              <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-full overflow-hidden bg-purple-100 ring-1 ring-gray-200 shrink-0">
-                  <img
-                    src={
-                      currentJob.recruiter_avatar ||
-                      'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=80&h=80&q=80'
-                    }
-                    alt={currentJob.recruiter_name || 'Recruiter'}
-                    className="w-full h-full object-cover"
-                  />
-                </div>
-                <span className="font-semibold text-gray-900 text-sm">
-                  {currentJob.recruiter_name || 'Philip Nwachukwu Mathew'}
-                </span>
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-gray-400 font-medium block">Lead Recruiter</span>
+                {canManageTeam && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedLeadId(leadRecruiter?.user_id || '')
+                      setShowAssignLeadModal(true)
+                    }}
+                    className="text-xs text-[#5C00DD] font-semibold hover:underline cursor-pointer"
+                  >
+                    {leadRecruiter ? 'Change Lead' : 'Assign Lead'}
+                  </button>
+                )}
               </div>
+
+              {leadRecruiter ? (
+                <div className="flex items-center justify-between p-2.5 rounded-xl bg-gray-50/70 border border-gray-100">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div className="w-8 h-8 rounded-full bg-[#F3EBFD] text-[#5C00DD] font-bold flex items-center justify-center shrink-0 ring-1 ring-purple-200 text-xs shadow-xs">
+                      {getInitials(leadRecruiter.display_name)}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="font-semibold text-gray-900 text-sm truncate">
+                        {leadRecruiter.display_name}
+                      </p>
+                      <span className="text-[11px] text-gray-500 font-normal">Primary Recruiter</span>
+                    </div>
+                  </div>
+                  <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-[#F3EBFD] text-[#5C00DD] shrink-0">
+                    Lead
+                  </span>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between p-2.5 rounded-xl bg-amber-50/50 border border-amber-200/60">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-full bg-amber-100 text-amber-700 font-bold flex items-center justify-center shrink-0 text-xs">
+                      ?
+                    </div>
+                    <div>
+                      <p className="font-semibold text-gray-700 text-sm">Unassigned</p>
+                      <span className="text-[11px] text-gray-500">No lead recruiter assigned yet</span>
+                    </div>
+                  </div>
+                  {canManageTeam && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedLeadId('')
+                        setShowAssignLeadModal(true)
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-[#5C00DD] text-white text-xs font-semibold hover:bg-[#4900B0] transition-colors cursor-pointer"
+                    >
+                      Assign Lead
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
 
+            {/* 2. Collaborating Recruiters */}
             <div>
-              <span className="text-gray-400 font-medium block">Start Date</span>
-              <p className="font-medium text-gray-800 mt-0.5">
-                {formatDate(currentJob.start_date || currentJob.created_at)}
-              </p>
+              <div className="flex items-center justify-between mb-1.5">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-gray-400 font-medium">Collaborating Recruiters</span>
+                  <span className="text-[11px] text-gray-400 font-normal">
+                    ({collaborators.length})
+                  </span>
+                </div>
+                {canManageTeam && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedCollaboratorId('')
+                      setShowAddCollaboratorModal(true)
+                    }}
+                    className="text-xs text-[#5C00DD] font-semibold hover:underline inline-flex items-center gap-1 cursor-pointer"
+                  >
+                    <Plus size={13} />
+                    <span>Add Recruiter</span>
+                  </button>
+                )}
+              </div>
+
+              {collaborators.length === 0 ? (
+                <div className="p-3 rounded-xl border border-dashed border-gray-200 text-center">
+                  <p className="text-gray-400 text-xs">No collaborating recruiters assigned</p>
+                  {canManageTeam && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedCollaboratorId('')
+                        setShowAddCollaboratorModal(true)
+                      }}
+                      className="mt-1 text-xs text-[#5C00DD] font-medium hover:underline inline-flex items-center gap-1 cursor-pointer"
+                    >
+                      <Plus size={12} />
+                      <span>Add collaborator</span>
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-1.5">
+                  {collaborators.map(c => {
+                    const canRemove = canManageTeam || session?.user?.id === c.user_id
+                    return (
+                      <div
+                        key={c.user_id}
+                        className="flex items-center justify-between p-2 rounded-xl bg-gray-50/50 border border-gray-100 hover:bg-gray-50 transition-colors"
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className="w-7 h-7 rounded-full bg-blue-50 text-blue-700 font-semibold flex items-center justify-center shrink-0 ring-1 ring-blue-100 text-[11px]">
+                            {getInitials(c.display_name)}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="font-medium text-gray-800 text-xs truncate">
+                              {c.display_name}
+                            </p>
+                            <span className="text-[10px] text-gray-400">Collaborator</span>
+                          </div>
+                        </div>
+
+                        {canRemove && (
+                          <button
+                            type="button"
+                            onClick={() => void handleRemoveCollaborator(c.user_id, c.display_name)}
+                            disabled={isRemovingCollaborator === c.user_id}
+                            title="Remove collaborator"
+                            className="p-1 text-gray-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer"
+                            aria-label={`Remove collaborator ${c.display_name}`}
+                          >
+                            {isRemovingCollaborator === c.user_id ? (
+                              <Loader2 size={13} className="animate-spin text-rose-500" />
+                            ) : (
+                              <X size={13} />
+                            )}
+                          </button>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
             </div>
 
-            <div>
-              <span className="text-gray-400 font-medium block">End Date</span>
-              <p className="font-medium text-gray-800 mt-0.5">
-                {formatDate(currentJob.deadline)}
-              </p>
+            {/* 3. Dates: Start Date & End Date matching Figma */}
+            <div className="pt-2 border-t border-gray-100 grid grid-cols-2 gap-4">
+              <div>
+                <span className="text-gray-400 font-medium block">Start Date</span>
+                <p className="font-medium text-gray-800 mt-0.5">
+                  {formatDate(currentJob.start_date || currentJob.created_at)}
+                </p>
+              </div>
+
+              <div>
+                <span className="text-gray-400 font-medium block">End Date</span>
+                <p className="font-medium text-gray-800 mt-0.5">
+                  {formatDate(currentJob.deadline)}
+                </p>
+              </div>
             </div>
           </div>
         </div>
@@ -558,7 +1029,8 @@ export function JobDetailsPage() {
             Qualification
           </h2>
           <div className="text-xs text-gray-600 leading-relaxed whitespace-pre-line space-y-1.5">
-            {currentJob.requirements || 'Minimum 5 years of industry experience.'}
+            {currentJob.requirements ||
+              '• Minimum 5 years in marketing or recruitment leadership.'}
           </div>
         </section>
 
@@ -567,14 +1039,14 @@ export function JobDetailsPage() {
           <h2 className="text-sm font-bold text-gray-900 tracking-tight mb-3">
             Skills
           </h2>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap gap-2">
             {(currentJob.skills && currentJob.skills.length > 0
               ? currentJob.skills
               : ['Ecosystem Thinker', 'Strong communication', 'High on Execution']
             ).map((skill, idx) => (
               <span
                 key={idx}
-                className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-medium text-[#4338CA] bg-[#EEF2FF] border border-[#C7D2FE]/60"
+                className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-medium bg-gray-50 border border-gray-200 text-gray-700"
               >
                 {skill}
               </span>
@@ -620,6 +1092,188 @@ export function JobDetailsPage() {
           </ol>
         </section>
       </div>
+
+      {/* Add Collaborator Modal */}
+      {showAddCollaboratorModal && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="add-collaborator-title"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs animate-in fade-in"
+        >
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-gray-100 flex flex-col gap-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-[#F3EBFD] text-[#5C00DD] flex items-center justify-center">
+                  <UserPlus size={18} />
+                </div>
+                <h3 id="add-collaborator-title" className="text-base font-bold text-gray-900">
+                  Add Collaborating Recruiter
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAddCollaboratorModal(false)
+                  setSelectedCollaboratorId('')
+                }}
+                className="text-gray-400 hover:text-gray-600 p-1 rounded-lg hover:bg-gray-100 cursor-pointer"
+                aria-label="Close dialog"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <p className="text-xs text-gray-600">
+              Select an authorized recruiter from your workspace directory to collaborate on candidate reviews, ratings, and interviews for this vacancy.
+            </p>
+
+            {availableForCollab.length === 0 ? (
+              <div className="p-4 rounded-xl bg-gray-50 border border-gray-100 text-center text-xs text-gray-500">
+                All authorized workspace recruiters are already assigned to this vacancy.
+              </div>
+            ) : (
+              <div>
+                <label htmlFor="collab-select" className="text-xs font-semibold text-gray-700 block mb-1.5">
+                  Select Recruiter
+                </label>
+                <select
+                  id="collab-select"
+                  value={selectedCollaboratorId}
+                  onChange={e => setSelectedCollaboratorId(e.target.value)}
+                  className="w-full text-xs rounded-xl border border-gray-300 px-3 py-2.5 bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-[#5C00DD] focus:border-transparent"
+                >
+                  <option value="">-- Choose a recruiter --</option>
+                  {availableForCollab.map(r => (
+                    <option key={r.user_id} value={r.user_id}>
+                      {r.display_name} {r.role === 'admin' ? '(Admin)' : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-gray-100">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAddCollaboratorModal(false)
+                  setSelectedCollaboratorId('')
+                }}
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-gray-600 hover:bg-gray-100 transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={!selectedCollaboratorId || isAddingCollaborator}
+                onClick={() => void handleAddCollaborator(selectedCollaboratorId)}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold text-white bg-[#5C00DD] hover:bg-[#4900B0] disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer shadow-xs"
+              >
+                {isAddingCollaborator ? (
+                  <>
+                    <Loader2 size={14} className="animate-spin" />
+                    <span>Adding...</span>
+                  </>
+                ) : (
+                  <>
+                    <UserPlus size={14} />
+                    <span>Add Collaborator</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Assign Lead Recruiter Modal */}
+      {showAssignLeadModal && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="assign-lead-title"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs animate-in fade-in"
+        >
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-gray-100 flex flex-col gap-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-[#F3EBFD] text-[#5C00DD] flex items-center justify-center">
+                  <UserCheck size={18} />
+                </div>
+                <h3 id="assign-lead-title" className="text-base font-bold text-gray-900">
+                  {leadRecruiter ? 'Change Lead Recruiter' : 'Assign Lead Recruiter'}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAssignLeadModal(false)
+                  setSelectedLeadId('')
+                }}
+                className="text-gray-400 hover:text-gray-600 p-1 rounded-lg hover:bg-gray-100 cursor-pointer"
+                aria-label="Close dialog"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <p className="text-xs text-gray-600">
+              Assign an authorized recruiter as the primary owner for this vacancy. The lead recruiter manages collaboration, receives primary notifications, and oversees stage progression.
+            </p>
+
+            <div>
+              <label htmlFor="lead-select" className="text-xs font-semibold text-gray-700 block mb-1.5">
+                Authorized Recruiter Directory
+              </label>
+              <select
+                id="lead-select"
+                value={selectedLeadId}
+                onChange={e => setSelectedLeadId(e.target.value)}
+                className="w-full text-xs rounded-xl border border-gray-300 px-3 py-2.5 bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-[#5C00DD] focus:border-transparent"
+              >
+                <option value="">-- Choose lead recruiter --</option>
+                {allRecruiters.map(r => (
+                  <option key={r.user_id} value={r.user_id}>
+                    {r.display_name} {r.user_id === leadRecruiter?.user_id ? '(Current Lead)' : ''} {r.role === 'admin' ? '(Admin)' : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-gray-100">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAssignLeadModal(false)
+                  setSelectedLeadId('')
+                }}
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-gray-600 hover:bg-gray-100 transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={!selectedLeadId || isAssigningLead}
+                onClick={() => void handleAssignLead(selectedLeadId)}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold text-white bg-[#5C00DD] hover:bg-[#4900B0] disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer shadow-xs"
+              >
+                {isAssigningLead ? (
+                  <>
+                    <Loader2 size={14} className="animate-spin" />
+                    <span>Assigning...</span>
+                  </>
+                ) : (
+                  <>
+                    <UserCheck size={14} />
+                    <span>Confirm Assignment</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
