@@ -31,6 +31,10 @@ export interface Vacancy {
   deadline: string | null
   skills?: string[]
   benefits?: string[]
+  responsibilities?: string
+  code?: string
+  recruiter_name?: string
+  recruiter_avatar?: string
   status: VacancyStatus
   created_at: string
   updated_at?: string

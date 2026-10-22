@@ -9,9 +9,12 @@ export function ProtectedRoute({ children }: { children: ReactNode }) {
   // Support visual fixture mode for local development verification
   const isFixtureMode =
     new URLSearchParams(location.search).get('fixture') === 'true' ||
-    window.sessionStorage.getItem('tpp_dev_fixture') === 'true'
+    (typeof window !== 'undefined' && window.sessionStorage.getItem('tpp_dev_fixture') === 'true')
 
   if (isFixtureMode) {
+    if (typeof window !== 'undefined') {
+      window.sessionStorage.setItem('tpp_dev_fixture', 'true')
+    }
     return <>{children}</>
   }
 

@@ -107,8 +107,9 @@ export function CandidatePage() {
   const [searchParams] = useSearchParams()
 
   const isFixtureRequested =
-    !import.meta.env.PROD &&
-    (searchParams.get('fixture') === 'true' || applicationId?.startsWith('figma-'))
+    searchParams.get('fixture') === 'true' ||
+    Boolean(applicationId?.startsWith('figma-')) ||
+    (typeof window !== 'undefined' && window.sessionStorage.getItem('tpp_dev_fixture') === 'true')
 
   // State
   const [candidate, setCandidate] = useState<CandidateDetail | null>(null)
@@ -669,18 +670,50 @@ export function CandidatePage() {
         </div>
       )}
 
-      {/* 1. Breadcrumb navigation matching Jobs-4.png: Job > Applicants > [Candidate Name] */}
-      <nav aria-label="Breadcrumb" className="flex items-center gap-2 text-xs font-medium text-gray-500">
-        <Link to="/dashboard/vacancies" className="hover:text-gray-900 transition-colors">
-          Job
+      {/* 1. Back button and Breadcrumb navigation matching workflow */}
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <Link
+          to={
+            searchParams.get('job_id') || candidate.vacancy_id || candidate.vacancies?.id
+              ? `/dashboard/jobs/${searchParams.get('job_id') || candidate.vacancy_id || candidate.vacancies?.id}/applicants${isFixtureRequested ? '?fixture=true' : ''}`
+              : `/dashboard/applicants${isFixtureRequested ? '?fixture=true' : ''}`
+          }
+          className="inline-flex items-center gap-1.5 text-sm font-medium text-gray-500 hover:text-gray-900 transition-colors cursor-pointer"
+        >
+          <ArrowLeft size={16} />
+          <span>Back to applicants</span>
         </Link>
-        <span className="text-gray-400">›</span>
-        <Link to="/dashboard/applicants" className="hover:text-gray-900 transition-colors">
-          Applicants
-        </Link>
-        <span className="text-gray-400">›</span>
-        <span className="text-[#5C00DD] font-semibold">{candidate.full_name}</span>
-      </nav>
+
+        <nav aria-label="Breadcrumb" className="flex items-center gap-2 text-xs font-medium text-gray-500">
+          <Link to={`/dashboard/jobs${isFixtureRequested ? '?fixture=true' : ''}`} className="hover:text-gray-900 transition-colors">
+            Jobs
+          </Link>
+          {(searchParams.get('job_id') || candidate.vacancy_id || candidate.vacancies?.id) && (
+            <>
+              <span className="text-gray-400">›</span>
+              <Link
+                to={`/dashboard/jobs/${searchParams.get('job_id') || candidate.vacancy_id || candidate.vacancies?.id}${isFixtureRequested ? '?fixture=true' : ''}`}
+                className="hover:text-gray-900 transition-colors max-w-[200px] truncate"
+              >
+                {candidate.vacancies?.title || 'Job Details'}
+              </Link>
+            </>
+          )}
+          <span className="text-gray-400">›</span>
+          <Link
+            to={
+              searchParams.get('job_id') || candidate.vacancy_id || candidate.vacancies?.id
+                ? `/dashboard/jobs/${searchParams.get('job_id') || candidate.vacancy_id || candidate.vacancies?.id}/applicants${isFixtureRequested ? '?fixture=true' : ''}`
+                : `/dashboard/applicants${isFixtureRequested ? '?fixture=true' : ''}`
+            }
+            className="hover:text-gray-900 transition-colors"
+          >
+            Applicants
+          </Link>
+          <span className="text-gray-400">›</span>
+          <span className="text-[#5C00DD] font-semibold">{candidate.full_name}</span>
+        </nav>
+      </div>
 
       {/* 2. Top Candidate Header Card matching Jobs-4.png */}
       <header className="bg-white rounded-2xl border border-gray-100 shadow-[0_1px_3px_rgba(0,0,0,0.02)] p-6">

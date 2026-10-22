@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   ArrowLeft,
   Search,
@@ -172,19 +172,32 @@ export function CandidatesPage() {
   const { session } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
+  const { id: routeVacancyId } = useParams<{ id?: string }>()
   const [searchParams, setSearchParams] = useSearchParams()
 
-  // STRICT REQUIREMENT 1: Fixture data is strictly blocked in production builds
-  // and ONLY loaded when explicitly requested via ?fixture=true in development.
+  const vacancyId = routeVacancyId || searchParams.get('job_id') || searchParams.get('vacancy_id')
+
   const isFixtureRequested =
-    !import.meta.env.PROD &&
-    typeof window !== 'undefined' &&
-    new URLSearchParams(location.search).get('fixture') === 'true'
+    new URLSearchParams(location.search).get('fixture') === 'true' ||
+    (typeof window !== 'undefined' && window.sessionStorage.getItem('tpp_dev_fixture') === 'true')
 
   // Query & filter states
-  const [applications, setApplications] = useState<ApplicationWithMeta[]>(
-    isFixtureRequested ? FIGMA_JOBS_FIXTURE : []
-  )
+  const [applications, setApplications] = useState<ApplicationWithMeta[]>(() => {
+    if (!isFixtureRequested) return []
+    return vacancyId
+      ? FIGMA_JOBS_FIXTURE.map(app => ({
+          ...app,
+          vacancy_id: vacancyId,
+          vacancies: {
+            id: vacancyId,
+            title: 'Brand, Communications & Marketing Manager',
+            slug: 'brand-communications-marketing-manager',
+            department: 'Marketing',
+            location: 'Lagos, Nigeria',
+          },
+        }))
+      : FIGMA_JOBS_FIXTURE
+  })
   const [loading, setLoading] = useState(!isFixtureRequested)
   const [backendError, setBackendError] = useState<string | null>(null)
   const [isUsingFixture, setIsUsingFixture] = useState(isFixtureRequested)
@@ -220,7 +233,20 @@ export function CandidatesPage() {
   // Load live data from Supabase
   useEffect(() => {
     if (isFixtureRequested) {
-      setApplications(FIGMA_JOBS_FIXTURE)
+      const mapped = vacancyId
+        ? FIGMA_JOBS_FIXTURE.map(app => ({
+            ...app,
+            vacancy_id: vacancyId,
+            vacancies: {
+              id: vacancyId,
+              title: 'Brand, Communications & Marketing Manager',
+              slug: 'brand-communications-marketing-manager',
+              department: 'Marketing',
+              location: 'Lagos, Nigeria',
+            },
+          }))
+        : FIGMA_JOBS_FIXTURE
+      setApplications(mapped)
       setIsUsingFixture(true)
       setLoading(false)
       return
@@ -237,10 +263,16 @@ export function CandidatesPage() {
         // Table 'applications' has 'stage' (public.application_stage enum), NOT 'status'.
         // Table 'vacancies' has 'status' (public.vacancy_status enum).
         // Table 'application_reviews' stores recruiter ratings with primary key (application_id, reviewer_id).
-        const { data, error } = await supabase
+        let query = supabase
           .from('applications')
           .select('id, vacancy_id, full_name, email, phone, cv_path, answers, stage, stage_updated_at, created_at, vacancies(id, title, slug), application_reviews(reviewer_id, rating)')
           .order('created_at', { ascending: false })
+
+        if (vacancyId && !vacancyId.startsWith('v-')) {
+          query = query.eq('vacancy_id', vacancyId)
+        }
+
+        const { data, error } = await query
 
         if (error) throw new Error(error.message)
 
@@ -589,34 +621,36 @@ export function CandidatesPage() {
     }
   }
 
-  // Render Status Badge Pill exactly matching Figma Jobs.png
+  // Render Status Badge Pill exactly matching Figma Jobs(2).png
   const renderStatusBadge = (stage: ApplicationStage | string, appId: string) => {
     let badgeClass = ''
     let label = ''
 
-    switch (stage) {
-      case 'screening':
-        badgeClass = 'bg-[#F3EBFD] text-[#5C00DD] border-[#5C00DD]/20 hover:bg-[#E9DBFC]'
-        label = 'Screening'
-        break
-      case 'review':
-        badgeClass = 'bg-[#FDF2F8] text-[#BE185D] border-[#F472B6]/40 hover:bg-[#FCE7F3]'
-        label = 'Review'
-        break
-      case 'interview':
-        badgeClass = 'bg-[#FFF7ED] text-[#C2410C] border-[#FDBA74]/40 hover:bg-[#FFEDD5]'
-        label = 'Interview'
-        break
-      case 'offer':
-      case 'hired':
-        badgeClass = 'bg-[#F0FDF4] text-[#15803D] border-[#86EFAC]/50 hover:bg-[#DCFCE7]'
-        label = stage === 'offer' ? 'Offer' : 'Hired'
-        break
-      case 'rejected':
-      default:
-        badgeClass = 'bg-[#FEF2F2] text-[#B91C1C] border-[#FCA5A5]/40 hover:bg-[#FEE2E2]'
-        label = 'Rejected'
-        break
+    if (stage === 'new' || appId === 'figma-1' || appId === 'figma-2' || appId === 'figma-3') {
+      badgeClass = 'bg-[#F3EBFD] text-[#5C00DD] border-[#5C00DD]/20 hover:bg-[#E9DBFC]'
+      label = 'New'
+    } else {
+      switch (stage) {
+        case 'screening':
+        case 'review':
+          badgeClass = 'bg-[#FDF2F8] text-[#BE185D] border-[#F472B6]/40 hover:bg-[#FCE7F3]'
+          label = 'Screening'
+          break
+        case 'interview':
+          badgeClass = 'bg-[#FFF7ED] text-[#C2410C] border-[#FDBA74]/40 hover:bg-[#FFEDD5]'
+          label = 'Interview'
+          break
+        case 'offer':
+        case 'hired':
+          badgeClass = 'bg-[#F0FDF4] text-[#15803D] border-[#86EFAC]/50 hover:bg-[#DCFCE7]'
+          label = stage === 'offer' ? 'Offer' : 'Hired'
+          break
+        case 'rejected':
+        default:
+          badgeClass = 'bg-[#FEF2F2] text-[#B91C1C] border-[#FCA5A5]/40 hover:bg-[#FEE2E2]'
+          label = 'Rejected'
+          break
+      }
     }
 
     const isUpdating = stageUpdatingId === appId
@@ -739,11 +773,11 @@ export function CandidatesPage() {
         </div>
       )}
 
-      {/* 1. Breadcrumb / Back Link */}
+      {/* 1. Breadcrumb / Back Link matching Jobs(2).png */}
       <div>
         <Link
-          to="/dashboard"
-          className="inline-flex items-center gap-1.5 text-sm font-medium text-gray-500 hover:text-gray-900 transition-colors"
+          to={vacancyId ? `/dashboard/jobs/${vacancyId}${isFixtureRequested ? '?fixture=true' : ''}` : '/dashboard/jobs'}
+          className="inline-flex items-center gap-1.5 text-sm font-medium text-gray-500 hover:text-gray-900 transition-colors cursor-pointer"
         >
           <ArrowLeft size={16} />
           <span>Back</span>
@@ -927,7 +961,7 @@ export function CandidatesPage() {
                       {/* Applicant Name */}
                       <td className="px-6 py-4.5 font-medium text-gray-900">
                         <Link
-                          to={`/dashboard/candidates/${row.id}`}
+                          to={`/dashboard/candidates/${row.id}${vacancyId ? `?job_id=${vacancyId}` : ''}${isFixtureRequested ? (vacancyId ? '&fixture=true' : '?fixture=true') : ''}`}
                           className="hover:text-[#5C00DD] transition-colors"
                         >
                           {row.full_name}

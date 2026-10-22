@@ -14,6 +14,7 @@ const PipelinePage = lazy(() => import('./pages/dashboard/PipelinePage').then(m 
 const CandidatesPage = lazy(() => import('./pages/dashboard/CandidatesPage').then(m => ({ default: m.CandidatesPage })))
 const CandidatePage = lazy(() => import('./pages/dashboard/CandidatePage').then(m => ({ default: m.CandidatePage })))
 const VacanciesPage = lazy(() => import('./pages/dashboard/VacanciesPage').then(m => ({ default: m.VacanciesPage })))
+const JobDetailsPage = lazy(() => import('./pages/dashboard/JobDetailsPage').then(m => ({ default: m.JobDetailsPage })))
 const VacancyEditorPage = lazy(() => import('./pages/dashboard/VacancyEditorPage').then(m => ({ default: m.VacancyEditorPage })))
 const TemplatesPage = lazy(() => import('./pages/dashboard/TemplatesPage').then(m => ({ default: m.TemplatesPage })))
 const SettingsPage = lazy(() => import('./pages/dashboard/SettingsPage').then(m => ({ default: m.SettingsPage })))
@@ -62,10 +63,17 @@ export default function App() {
           {/* Vacancies / Jobs routes */}
           <Route path="vacancies" element={<VacanciesPage />} />
           <Route path="vacancies/new" element={<VacancyEditorPage />} />
-          <Route path="vacancies/:id" element={<VacancyEditorPage />} />
+          <Route path="vacancies/:id" element={<JobDetailsPage />} />
+          <Route path="vacancies/:id/edit" element={<VacancyEditorPage />} />
+          <Route path="vacancies/:id/applicants" element={<CandidatesPage />} />
+          <Route path="vacancies/:id/applicants/:applicationId" element={<CandidatePage />} />
+
           <Route path="jobs" element={<VacanciesPage />} />
           <Route path="jobs/new" element={<VacancyEditorPage />} />
-          <Route path="jobs/:id" element={<VacancyEditorPage />} />
+          <Route path="jobs/:id" element={<JobDetailsPage />} />
+          <Route path="jobs/:id/edit" element={<VacancyEditorPage />} />
+          <Route path="jobs/:id/applicants" element={<CandidatesPage />} />
+          <Route path="jobs/:id/applicants/:applicationId" element={<CandidatePage />} />
 
           <Route path="templates" element={<TemplatesPage />} />
           <Route path="settings" element={<SettingsPage />} />
