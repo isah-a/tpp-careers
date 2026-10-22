@@ -215,7 +215,7 @@ export function CandidatePage() {
       setNotes(FIGMA_NOTES_FIXTURE)
       setMyRating(4)
       setSiblingIds(['figma-1', 'figma-2', 'figma-3'])
-      setCvSignedUrl('/sample-multipage.pdf')
+      setCvSignedUrl(null)
       setLoading(false)
       return
     }
