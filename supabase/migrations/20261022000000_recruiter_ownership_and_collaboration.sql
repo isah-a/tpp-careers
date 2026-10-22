@@ -481,3 +481,105 @@ end;
 $$;
 revoke all on function public.remove_vacancy_collaborator(uuid, uuid) from public, anon;
 grant execute on function public.remove_vacancy_collaborator(uuid, uuid) to authenticated;
+
+-- -----------------------------------------------------------------------------
+-- 7. Candidate Operations Authorization (Assigned Team Protection)
+-- -----------------------------------------------------------------------------
+
+-- Helper: Check if caller has candidate operations access for an application
+-- Restricted to Workspace Admins, Vacancy Lead Recruiter, and Assigned Collaborators
+create or replace function public.has_application_candidate_access(p_application_id uuid)
+returns boolean
+language sql stable security definer set search_path = '' as $$
+  select exists (
+    select 1 from public.applications a
+    join public.vacancies v on v.id = a.vacancy_id
+    where a.id = p_application_id
+      and (
+        public.is_workspace_admin()
+        or v.lead_recruiter_id = auth.uid()
+        or exists (
+          select 1 from public.vacancy_collaborators vc
+          where vc.vacancy_id = v.id and vc.recruiter_id = auth.uid()
+        )
+      )
+  );
+$$;
+revoke all on function public.has_application_candidate_access(uuid) from public, anon;
+grant execute on function public.has_application_candidate_access(uuid) to authenticated;
+
+-- Least-privilege RLS updates for candidate notes, reviews, and interviews:
+drop policy if exists recruiter_notes_insert_own on public.application_notes;
+create policy recruiter_notes_insert_own on public.application_notes
+  for insert to authenticated
+  with check (
+    public.is_recruiter()
+    and author_id = auth.uid()
+    and public.has_application_candidate_access(application_id)
+  );
+
+drop policy if exists recruiter_reviews_insert_own on public.application_reviews;
+create policy recruiter_reviews_insert_own on public.application_reviews
+  for insert to authenticated
+  with check (
+    public.is_recruiter()
+    and reviewer_id = auth.uid()
+    and public.has_application_candidate_access(application_id)
+  );
+
+drop policy if exists recruiter_interviews_insert on public.interviews;
+create policy recruiter_interviews_insert on public.interviews
+  for insert to authenticated
+  with check (
+    public.is_recruiter()
+    and created_by = auth.uid()
+    and public.has_application_candidate_access(application_id)
+  );
+
+-- Candidate stage transition procedure secured with vacancy-level assignment check
+create or replace function public.transition_application_stage(
+  p_application_id uuid,
+  p_to_stage public.application_stage,
+  p_note text default null
+) returns public.applications
+language plpgsql security definer set search_path = '' as $$
+declare
+  v_actor uuid := auth.uid();
+  v_application public.applications;
+  v_from public.application_stage;
+begin
+  if v_actor is null or not public.is_recruiter() then
+    raise exception 'recruiter access required';
+  end if;
+
+  if not public.has_application_candidate_access(p_application_id) then
+    raise exception 'unauthorized: candidate stage transitions restricted to assigned recruiters';
+  end if;
+
+  if p_note is not null and char_length(p_note) > 2000 then
+    raise exception 'stage note is too long';
+  end if;
+
+  select stage into v_from from public.applications where id = p_application_id for update;
+  if not found then
+    raise exception 'application not found';
+  end if;
+
+  if v_from = p_to_stage then
+    select * into v_application from public.applications where id = p_application_id;
+    return v_application;
+  end if;
+
+  update public.applications
+    set stage = p_to_stage,
+        stage_updated_at = now()
+    where id = p_application_id
+    returning * into v_application;
+
+  insert into public.application_stage_history(application_id, from_stage, to_stage, changed_by, note)
+  values (p_application_id, v_from, p_to_stage, v_actor, nullif(btrim(p_note), ''));
+
+  return v_application;
+end;
+$$;
+

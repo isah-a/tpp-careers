@@ -106,10 +106,12 @@ export function CandidatePage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
 
+  const isRealUuid = Boolean(applicationId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(applicationId))
   const isFixtureRequested =
-    searchParams.get('fixture') === 'true' ||
-    Boolean(applicationId?.startsWith('figma-')) ||
-    (typeof window !== 'undefined' && window.sessionStorage.getItem('tpp_dev_fixture') === 'true')
+    !isRealUuid &&
+    (searchParams.get('fixture') === 'true' ||
+      Boolean(applicationId?.startsWith('figma-')) ||
+      (typeof window !== 'undefined' && window.sessionStorage.getItem('tpp_dev_fixture') === 'true'))
 
   // State
   const [candidate, setCandidate] = useState<CandidateDetail | null>(null)

@@ -177,9 +177,11 @@ export function CandidatesPage() {
 
   const vacancyId = routeVacancyId || searchParams.get('job_id') || searchParams.get('vacancy_id')
 
+  const isRealUuid = Boolean(vacancyId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(vacancyId))
   const isFixtureRequested =
-    new URLSearchParams(location.search).get('fixture') === 'true' ||
-    (typeof window !== 'undefined' && window.sessionStorage.getItem('tpp_dev_fixture') === 'true')
+    !isRealUuid &&
+    (new URLSearchParams(location.search).get('fixture') === 'true' ||
+      (typeof window !== 'undefined' && window.sessionStorage.getItem('tpp_dev_fixture') === 'true'))
 
   // Query & filter states
   const [applications, setApplications] = useState<ApplicationWithMeta[]>(() => {

@@ -100,15 +100,17 @@ export function JobDetailsPage() {
   const [searchParams] = useSearchParams()
   const { session, authorized } = useAuth()
 
+  const isRealUuid = Boolean(id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))
   const isFixtureRequested =
-    searchParams.get('fixture') === 'true' ||
-    id?.startsWith('v-') ||
-    (typeof window !== 'undefined' && window.sessionStorage.getItem('tpp_dev_fixture') === 'true')
+    !isRealUuid &&
+    (searchParams.get('fixture') === 'true' ||
+      id?.startsWith('v-') ||
+      (typeof window !== 'undefined' && window.sessionStorage.getItem('tpp_dev_fixture') === 'true'))
 
   const [job, setJob] = useState<VacancyDetailWithCounts | null>(
-    isFixtureRequested || id?.startsWith('v-') ? FIGMA_JOB_DETAILS_FIXTURE : null
+    isFixtureRequested ? FIGMA_JOB_DETAILS_FIXTURE : null
   )
-  const [loading, setLoading] = useState<boolean>(!isFixtureRequested && !id?.startsWith('v-'))
+  const [loading, setLoading] = useState<boolean>(!isFixtureRequested)
   const [error, setError] = useState<string | null>(null)
   const [actionSuccess, setActionSuccess] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
@@ -284,8 +286,8 @@ export function JobDetailsPage() {
         if (isMounted) {
           const msg = err instanceof Error ? err.message : 'Database error'
           console.error('[JobDetailsPage] Failed to fetch job details:', msg)
-          // If in dev/fixture mode, fallback to fixture so user can inspect layout
-          if (isFixtureRequested || id?.startsWith('v-') || !import.meta.env.PROD) {
+          // Only fallback to fixture for non-real test/fixture identifiers
+          if (!isRealUuid && (isFixtureRequested || id?.startsWith('v-'))) {
             setJob(FIGMA_JOB_DETAILS_FIXTURE)
           } else {
             setError(msg)
