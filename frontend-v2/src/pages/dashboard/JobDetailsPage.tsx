@@ -18,6 +18,8 @@ import {
   Plus,
   UserCheck,
   UserPlus,
+  ShieldAlert,
+  LogOut,
 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../context/AuthContext'
@@ -126,7 +128,7 @@ export function JobDetailsPage() {
   const [isAssigningLead, setIsAssigningLead] = useState<boolean>(false)
   const [isRemovingCollaborator, setIsRemovingCollaborator] = useState<string | null>(null)
 
-  // Permission evaluation
+  // Role and Permission evaluation
   const currentRecruiter = useMemo(() => {
     if (!session?.user?.id) return null
     return allRecruiters.find(r => r.user_id === session.user.id) || null
@@ -134,12 +136,18 @@ export function JobDetailsPage() {
 
   const isAdmin = currentRecruiter?.role === 'admin'
   const isLeadRecruiter = Boolean(session?.user?.id && job?.lead_recruiter_id === session.user.id)
-  const isCreator = Boolean(session?.user?.id && job?.created_by === session.user.id)
+  const isCollaborator = Boolean(session?.user?.id && collaborators.some(c => c.user_id === session.user.id))
   const isUnassigned = !job?.lead_recruiter_id || !leadRecruiter
 
-  // Lead recruiter, creator, workspace admin, or any authorized recruiter if vacancy is unassigned
-  const canManageTeam = Boolean(
-    isFixtureRequested || (authorized && (isAdmin || isLeadRecruiter || isCreator || isUnassigned))
+  // Vacancy management controls (Edit, Close/Reopen, Change Lead, Add Collaborator)
+  // strictly restricted to the Lead Recruiter or a Workspace Admin. Collaborators CANNOT manage vacancy.
+  const canManageVacancy = Boolean(
+    isFixtureRequested || (authorized && (isAdmin || isLeadRecruiter))
+  )
+
+  // Administrator-only reconciliation: only Workspace Admins can reconcile legacy unassigned vacancies.
+  const canReconcileUnassigned = Boolean(
+    isFixtureRequested || (authorized && isAdmin && isUnassigned)
   )
 
   // Eligible recruiters to be added as collaborators (excludes current lead & existing collaborators)
@@ -297,9 +305,9 @@ export function JobDetailsPage() {
     }
   }, [id, isFixtureRequested])
 
-  // Handle Close / Reopen Job action
+  // Handle Close / Reopen Job action (Lead Recruiter or Workspace Admin only)
   const handleToggleJobStatus = async () => {
-    if (!job) return
+    if (!job || !canManageVacancy) return
 
     const nextStatus: VacancyStatus = job.status === 'active' ? 'closed' : 'active'
     setIsTogglingStatus(true)
@@ -337,7 +345,7 @@ export function JobDetailsPage() {
     }
   }
 
-  // Handle Assign / Change Lead Recruiter
+  // Handle Assign / Change Lead Recruiter (Lead Recruiter or Workspace Admin only)
   const handleAssignLead = async (recruiterId: string) => {
     if (!job) return
     setIsAssigningLead(true)
@@ -378,7 +386,7 @@ export function JobDetailsPage() {
       })
 
       if (rpcErr) {
-        // Fallback to direct table update
+        // Fallback to direct table update (guarded by database RLS & trigger)
         const { error: directErr } = await supabase
           .from('vacancies')
           .update({ lead_recruiter_id: recruiterId })
@@ -418,9 +426,9 @@ export function JobDetailsPage() {
     }
   }
 
-  // Handle Add Collaborating Recruiter
+  // Handle Add Collaborating Recruiter (Lead Recruiter or Workspace Admin only)
   const handleAddCollaborator = async (recruiterId: string) => {
-    if (!job) return
+    if (!job || !canManageVacancy) return
     setIsAddingCollaborator(true)
     setActionError(null)
 
@@ -493,15 +501,25 @@ export function JobDetailsPage() {
     }
   }
 
-  // Handle Remove Collaborating Recruiter
+  // Handle Remove Collaborating Recruiter (Lead, Admin, or Collaborator voluntarily leaving)
   const handleRemoveCollaborator = async (recruiterId: string, recruiterName: string) => {
     if (!job) return
+    const isSelfLeaving = session?.user?.id === recruiterId
+    if (!canManageVacancy && !isSelfLeaving) {
+      setActionError('You do not have permission to remove collaborators from this vacancy.')
+      return
+    }
+
     setIsRemovingCollaborator(recruiterId)
     setActionError(null)
 
     if (isFixtureRequested || id?.startsWith('v-')) {
       setCollaborators(prev => prev.filter(c => c.user_id !== recruiterId))
-      setActionSuccess(`Removed ${recruiterName} from collaborating recruiters.`)
+      setActionSuccess(
+        isSelfLeaving
+          ? 'You have stepped down as a collaborator for this vacancy.'
+          : `Removed ${recruiterName} from collaborating recruiters.`
+      )
       setIsRemovingCollaborator(null)
       setTimeout(() => setActionSuccess(null), 3500)
       return
@@ -524,7 +542,11 @@ export function JobDetailsPage() {
       }
 
       setCollaborators(prev => prev.filter(c => c.user_id !== recruiterId))
-      setActionSuccess(`Removed ${recruiterName} from collaborating recruiters.`)
+      setActionSuccess(
+        isSelfLeaving
+          ? 'You have stepped down as a collaborator for this vacancy.'
+          : `Removed ${recruiterName} from collaborating recruiters.`
+      )
       setTimeout(() => setActionSuccess(null), 3500)
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to remove collaborator'
@@ -677,12 +699,17 @@ export function JobDetailsPage() {
                 ? 'Draft'
                 : 'Closed'}
             </span>
+            {isCollaborator && (
+              <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+                You are Collaborating
+              </span>
+            )}
           </div>
         </div>
 
-        {/* Action Buttons: View Applicants, Edit, Close Job */}
+        {/* Action Buttons: View Applicants (everyone), Edit (Lead/Admin only), Close Job (Lead/Admin only) */}
         <div className="flex items-center gap-3 self-start md:self-auto shrink-0">
-          {/* "View Applicants" Button -> Navigates to Job-specific Applicants */}
+          {/* "View Applicants" Button -> Accessible to Lead, Collaborators & Admins */}
           <Link
             to={`/dashboard/jobs/${currentJob.id}/applicants${isFixtureRequested ? '?fixture=true' : ''}`}
             className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#5C00DD] hover:bg-[#4900B0] text-white text-sm font-semibold transition-colors shadow-xs cursor-pointer active:scale-[0.99]"
@@ -691,40 +718,44 @@ export function JobDetailsPage() {
             <span>View Applicants</span>
           </Link>
 
-          {/* "Edit" Button -> Navigates to Vacancy Editor */}
-          <Link
-            to={`/dashboard/jobs/${currentJob.id}/edit${isFixtureRequested ? '?fixture=true' : ''}`}
-            className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-white hover:bg-gray-50 border border-gray-200 text-gray-700 text-sm font-semibold transition-colors shadow-xs cursor-pointer"
-          >
-            <Pencil size={15} className="text-gray-500" />
-            <span>Edit</span>
-          </Link>
+          {/* "Edit" Button -> Strictly Lead Recruiter or Workspace Admin */}
+          {canManageVacancy && (
+            <Link
+              to={`/dashboard/jobs/${currentJob.id}/edit${isFixtureRequested ? '?fixture=true' : ''}`}
+              className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-white hover:bg-gray-50 border border-gray-200 text-gray-700 text-sm font-semibold transition-colors shadow-xs cursor-pointer"
+            >
+              <Pencil size={15} className="text-gray-500" />
+              <span>Edit</span>
+            </Link>
+          )}
 
-          {/* "Close Job" / "Reopen Job" Button */}
-          <button
-            type="button"
-            disabled={isTogglingStatus}
-            onClick={() => void handleToggleJobStatus()}
-            className={`inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl border text-sm font-semibold transition-colors shadow-xs cursor-pointer ${
-              currentJob.status === 'active'
-                ? 'bg-white hover:bg-rose-50 border-rose-200 text-rose-600'
-                : 'bg-white hover:bg-emerald-50 border-emerald-200 text-emerald-700'
-            }`}
-          >
-            {isTogglingStatus ? (
-              <Loader2 size={15} className="animate-spin text-current" />
-            ) : currentJob.status === 'active' ? (
-              <>
-                <Lock size={15} />
-                <span>Close Job</span>
-              </>
-            ) : (
-              <>
-                <Unlock size={15} />
-                <span>Reopen Job</span>
-              </>
-            )}
-          </button>
+          {/* "Close Job" / "Reopen Job" Button -> Strictly Lead Recruiter or Workspace Admin */}
+          {canManageVacancy && (
+            <button
+              type="button"
+              disabled={isTogglingStatus}
+              onClick={() => void handleToggleJobStatus()}
+              className={`inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl border text-sm font-semibold transition-colors shadow-xs cursor-pointer ${
+                currentJob.status === 'active'
+                  ? 'bg-white hover:bg-rose-50 border-rose-200 text-rose-600'
+                  : 'bg-white hover:bg-emerald-50 border-emerald-200 text-emerald-700'
+              }`}
+            >
+              {isTogglingStatus ? (
+                <Loader2 size={15} className="animate-spin text-current" />
+              ) : currentJob.status === 'active' ? (
+                <>
+                  <Lock size={15} />
+                  <span>Close Job</span>
+                </>
+              ) : (
+                <>
+                  <Unlock size={15} />
+                  <span>Reopen Job</span>
+                </>
+              )}
+            </button>
+          )}
         </div>
       </div>
 
@@ -827,7 +858,7 @@ export function JobDetailsPage() {
             </h2>
             {isAdmin && (
               <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-purple-50 text-purple-700 border border-purple-100">
-                Admin Access
+                Workspace Admin
               </span>
             )}
           </div>
@@ -837,16 +868,16 @@ export function JobDetailsPage() {
             <div>
               <div className="flex items-center justify-between mb-1.5">
                 <span className="text-gray-400 font-medium block">Lead Recruiter</span>
-                {canManageTeam && (
+                {canManageVacancy && leadRecruiter && (
                   <button
                     type="button"
                     onClick={() => {
-                      setSelectedLeadId(leadRecruiter?.user_id || '')
+                      setSelectedLeadId(leadRecruiter.user_id)
                       setShowAssignLeadModal(true)
                     }}
                     className="text-xs text-[#5C00DD] font-semibold hover:underline cursor-pointer"
                   >
-                    {leadRecruiter ? 'Change Lead' : 'Assign Lead'}
+                    Change Lead
                   </button>
                 )}
               </div>
@@ -868,29 +899,50 @@ export function JobDetailsPage() {
                     Lead
                   </span>
                 </div>
-              ) : (
-                <div className="flex items-center justify-between p-2.5 rounded-xl bg-amber-50/50 border border-amber-200/60">
-                  <div className="flex items-center gap-2.5">
+              ) : canReconcileUnassigned ? (
+                /* Admin-Only Reconciliation Card */
+                <div className="flex items-center justify-between p-2.5 rounded-xl bg-amber-50/70 border border-amber-200">
+                  <div className="flex items-center gap-2.5 min-w-0">
                     <div className="w-8 h-8 rounded-full bg-amber-100 text-amber-700 font-bold flex items-center justify-center shrink-0 text-xs">
-                      ?
+                      <ShieldAlert size={15} />
                     </div>
-                    <div>
-                      <p className="font-semibold text-gray-700 text-sm">Unassigned</p>
-                      <span className="text-[11px] text-gray-500">No lead recruiter assigned yet</span>
+                    <div className="min-w-0">
+                      <p className="font-semibold text-amber-900 text-sm truncate">
+                        Unassigned Leadership
+                      </p>
+                      <span className="text-[11px] text-amber-700">
+                        Admin reconciliation required
+                      </span>
                     </div>
                   </div>
-                  {canManageTeam && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSelectedLeadId('')
-                        setShowAssignLeadModal(true)
-                      }}
-                      className="px-2.5 py-1 rounded-lg bg-[#5C00DD] text-white text-xs font-semibold hover:bg-[#4900B0] transition-colors cursor-pointer"
-                    >
-                      Assign Lead
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedLeadId('')
+                      setShowAssignLeadModal(true)
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-[#5C00DD] text-white text-xs font-semibold hover:bg-[#4900B0] transition-colors cursor-pointer shrink-0 shadow-xs"
+                  >
+                    Reconcile Lead
+                  </button>
+                </div>
+              ) : (
+                /* Safe Team Fallback for Ordinary Recruiter (Avoids Broken Permanent Unassigned State) */
+                <div className="flex items-center justify-between p-2.5 rounded-xl bg-gray-50/70 border border-gray-100">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div className="w-8 h-8 rounded-full bg-purple-50 text-[#5C00DD] font-bold flex items-center justify-center shrink-0 ring-1 ring-purple-200 text-xs shadow-xs">
+                      TP
+                    </div>
+                    <div className="min-w-0">
+                      <p className="font-semibold text-gray-900 text-sm truncate">
+                        {currentJob.client_name ? `${currentJob.client_name} Team` : 'The People Practice Team'}
+                      </p>
+                      <span className="text-[11px] text-gray-500 font-normal">Workspace Managed</span>
+                    </div>
+                  </div>
+                  <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-gray-100 text-gray-600 shrink-0">
+                    Team Managed
+                  </span>
                 </div>
               )}
             </div>
@@ -904,7 +956,7 @@ export function JobDetailsPage() {
                     ({collaborators.length})
                   </span>
                 </div>
-                {canManageTeam && (
+                {canManageVacancy && (
                   <button
                     type="button"
                     onClick={() => {
@@ -922,7 +974,7 @@ export function JobDetailsPage() {
               {collaborators.length === 0 ? (
                 <div className="p-3 rounded-xl border border-dashed border-gray-200 text-center">
                   <p className="text-gray-400 text-xs">No collaborating recruiters assigned</p>
-                  {canManageTeam && (
+                  {canManageVacancy && (
                     <button
                       type="button"
                       onClick={() => {
@@ -939,7 +991,9 @@ export function JobDetailsPage() {
               ) : (
                 <div className="space-y-1.5">
                   {collaborators.map(c => {
-                    const canRemove = canManageTeam || session?.user?.id === c.user_id
+                    const isSelf = session?.user?.id === c.user_id
+                    const canRemove = canManageVacancy || isSelf
+
                     return (
                       <div
                         key={c.user_id}
@@ -951,27 +1005,43 @@ export function JobDetailsPage() {
                           </div>
                           <div className="min-w-0">
                             <p className="font-medium text-gray-800 text-xs truncate">
-                              {c.display_name}
+                              {c.display_name} {isSelf ? '(You)' : ''}
                             </p>
                             <span className="text-[10px] text-gray-400">Collaborator</span>
                           </div>
                         </div>
 
                         {canRemove && (
-                          <button
-                            type="button"
-                            onClick={() => void handleRemoveCollaborator(c.user_id, c.display_name)}
-                            disabled={isRemovingCollaborator === c.user_id}
-                            title="Remove collaborator"
-                            className="p-1 text-gray-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer"
-                            aria-label={`Remove collaborator ${c.display_name}`}
-                          >
-                            {isRemovingCollaborator === c.user_id ? (
-                              <Loader2 size={13} className="animate-spin text-rose-500" />
-                            ) : (
-                              <X size={13} />
+                          <div className="flex items-center gap-1">
+                            {isSelf && !canManageVacancy && (
+                              <button
+                                type="button"
+                                onClick={() => void handleRemoveCollaborator(c.user_id, 'yourself')}
+                                disabled={isRemovingCollaborator === c.user_id}
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] text-rose-600 bg-rose-50 hover:bg-rose-100 transition-colors cursor-pointer"
+                              >
+                                <LogOut size={11} />
+                                <span>Leave</span>
+                              </button>
                             )}
-                          </button>
+
+                            {canManageVacancy && (
+                              <button
+                                type="button"
+                                onClick={() => void handleRemoveCollaborator(c.user_id, c.display_name)}
+                                disabled={isRemovingCollaborator === c.user_id}
+                                title="Remove collaborator"
+                                className="p-1 text-gray-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer"
+                                aria-label={`Remove collaborator ${c.display_name}`}
+                              >
+                                {isRemovingCollaborator === c.user_id ? (
+                                  <Loader2 size={13} className="animate-spin text-rose-500" />
+                                ) : (
+                                  <X size={13} />
+                                )}
+                              </button>
+                            )}
+                          </div>
                         )}
                       </div>
                     )
@@ -1093,8 +1163,8 @@ export function JobDetailsPage() {
         </section>
       </div>
 
-      {/* Add Collaborator Modal */}
-      {showAddCollaboratorModal && (
+      {/* Add Collaborator Modal (Lead Recruiter or Workspace Admin only) */}
+      {showAddCollaboratorModal && canManageVacancy && (
         <div
           role="dialog"
           aria-modal="true"
@@ -1187,8 +1257,8 @@ export function JobDetailsPage() {
         </div>
       )}
 
-      {/* Assign Lead Recruiter Modal */}
-      {showAssignLeadModal && (
+      {/* Assign / Reconcile Lead Recruiter Modal (Lead Recruiter or Workspace Admin only) */}
+      {showAssignLeadModal && (canManageVacancy || canReconcileUnassigned) && (
         <div
           role="dialog"
           aria-modal="true"
@@ -1202,7 +1272,7 @@ export function JobDetailsPage() {
                   <UserCheck size={18} />
                 </div>
                 <h3 id="assign-lead-title" className="text-base font-bold text-gray-900">
-                  {leadRecruiter ? 'Change Lead Recruiter' : 'Assign Lead Recruiter'}
+                  {leadRecruiter ? 'Change Lead Recruiter' : 'Reconcile Lead Ownership'}
                 </h3>
               </div>
               <button

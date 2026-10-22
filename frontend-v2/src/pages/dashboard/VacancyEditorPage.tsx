@@ -21,6 +21,7 @@ import {
   Pencil,
   Plus,
   Save,
+  ShieldAlert,
   Trash2,
   User,
   X,
@@ -131,6 +132,7 @@ export function VacancyEditorPage() {
   // Status & loading states
   const [loading, setLoading] = useState<boolean>(Boolean(id || searchParams.get('template')))
   const [saving, setSaving] = useState<boolean>(false)
+  const [unauthorized, setUnauthorized] = useState<boolean>(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [successNotice, setSuccessNotice] = useState<string | null>(null)
 
@@ -222,6 +224,23 @@ export function VacancyEditorPage() {
           const data = vacRes.data
 
           if (isMounted && data) {
+            // Guard: Only Lead Recruiter or Workspace Admin can edit an existing vacancy
+            if (session?.user?.id && !isFixture) {
+              const { data: recData } = await supabase
+                .from('recruiters')
+                .select('role')
+                .eq('user_id', session.user.id)
+                .maybeSingle()
+
+              const isWorkspaceAdmin = recData?.role === 'admin'
+              const isLead = data.lead_recruiter_id === session.user.id
+              if (!isWorkspaceAdmin && !isLead) {
+                setUnauthorized(true)
+                setLoading(false)
+                return
+              }
+            }
+
             setForm({
               title: data.title || '',
               slug: data.slug || '',
@@ -769,6 +788,27 @@ export function VacancyEditorPage() {
       <div className="p-16 text-center text-gray-500">
         <Loader2 size={28} className="animate-spin text-[#5C00DD] mx-auto mb-3" />
         <p className="text-sm font-medium">Loading requisition editor...</p>
+      </div>
+    )
+  }
+
+  if (unauthorized) {
+    return (
+      <div className="p-12 max-w-[640px] mx-auto min-h-[400px] flex flex-col items-center justify-center text-center">
+        <div className="w-14 h-14 rounded-2xl bg-amber-50 border border-amber-200 text-amber-600 flex items-center justify-center mb-4">
+          <ShieldAlert size={28} />
+        </div>
+        <h1 className="text-xl font-bold text-gray-900">Permission Restricted</h1>
+        <p className="text-sm text-gray-600 mt-2 max-w-md">
+          Only the designated Lead Recruiter or a Workspace Administrator has permission to edit this vacancy's details, requirements, and screening questions.
+        </p>
+        <Link
+          to={`/dashboard/jobs/${id}`}
+          className="mt-6 inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#5C00DD] text-white text-sm font-semibold hover:bg-[#4900B0] transition-colors shadow-xs"
+        >
+          <ArrowLeft size={16} />
+          <span>Return to Job Details</span>
+        </Link>
       </div>
     )
   }

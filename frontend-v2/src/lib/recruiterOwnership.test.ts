@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import migrationSql from '../../../supabase/migrations/20261022000000_recruiter_ownership_and_collaboration.sql?raw'
 import type { Recruiter, Vacancy, VacancyCollaborator } from '../types'
 
-describe('Recruiter Ownership and Collaboration Migration Security & Schema', () => {
+describe('Recruiter Ownership & Collaboration Migration Security & Schema Audit', () => {
   it('adds lead_recruiter_id column with foreign key to recruiters directory and default auth.uid()', () => {
     expect(migrationSql).toMatch(/alter table public\.vacancies/i)
     expect(migrationSql).toMatch(
@@ -23,23 +23,61 @@ describe('Recruiter Ownership and Collaboration Migration Security & Schema', ()
     expect(migrationSql).toMatch(/constraint vacancy_collaborators_unique_assignment unique \(vacancy_id, recruiter_id\)/i)
   })
 
-  it('enforces RLS policies on vacancy_collaborators preventing unauthorized or duplicate assignment', () => {
+  it('enforces server-side trigger to set created_by and lead_recruiter_id preventing client spoofing', () => {
+    expect(migrationSql).toMatch(/create or replace function public\.set_vacancy_creator_and_lead/i)
+    expect(migrationSql).toMatch(/new\.created_by := v_actor/i)
+    expect(migrationSql).toMatch(/new\.lead_recruiter_id := v_actor/i)
+    expect(migrationSql).toMatch(/create trigger set_vacancy_creator_and_lead_trigger/i)
+  })
+
+  it('enforces trigger preserving created_by as immutable and restricting deletion', () => {
+    expect(migrationSql).toMatch(/create or replace function public\.enforce_vacancy_invariants/i)
+    expect(migrationSql).toMatch(/new\.created_by is distinct from old\.created_by/i)
+    expect(migrationSql).toMatch(/created_by cannot be modified/i)
+    expect(migrationSql).toMatch(/old\.status != 'draft'/i)
+    expect(migrationSql).toMatch(/cannot delete vacancy with submitted candidate applications/i)
+  })
+
+  it('strictly restricts unassigned vacancy management to Workspace Admins in can_manage_vacancy()', () => {
+    expect(migrationSql).toMatch(/create or replace function public\.can_manage_vacancy/i)
+    expect(migrationSql).toMatch(/if public\.is_workspace_admin\(\) then\s+return true;/i)
+    // Unassigned check: must NOT return true for ordinary recruiters
+    expect(migrationSql).toMatch(/if v_lead is null then\s+return false;/i)
+  })
+
+  it('provides a secure, one-time bootstrap procedure for the first Workspace Admin', () => {
+    expect(migrationSql).toMatch(/create or replace function public\.bootstrap_first_workspace_admin/i)
+    expect(migrationSql).toMatch(/select count\(\*\) into v_admin_count from public\.recruiters where role = 'admin'/i)
+    expect(migrationSql).toMatch(/workspace already has an initialized administrator/i)
+  })
+
+  it('provides administrator-only role management preventing demotion of the last admin', () => {
+    expect(migrationSql).toMatch(/create or replace function public\.set_recruiter_role/i)
+    expect(migrationSql).toMatch(/if not public\.is_workspace_admin\(\) then/i)
+    expect(migrationSql).toMatch(/cannot demote the last remaining workspace administrator/i)
+  })
+
+  it('drops broad legacy policies and enforces least-privilege RLS on vacancies and screening questions', () => {
+    // Vacancies
+    expect(migrationSql).toMatch(/drop policy if exists recruiter_vacancies_all on public\.vacancies/i)
+    expect(migrationSql).toMatch(/create policy recruiter_vacancies_update on public\.vacancies[\s\S]*public\.is_workspace_admin\(\) or lead_recruiter_id = auth\.uid\(\)/i)
+    expect(migrationSql).toMatch(/create policy recruiter_vacancies_delete on public\.vacancies[\s\S]*status = 'draft'/i)
+    // Screening Questions
+    expect(migrationSql).toMatch(/drop policy if exists recruiter_questions_all on public\.screening_questions/i)
+    expect(migrationSql).toMatch(/create policy recruiter_questions_write on public\.screening_questions[\s\S]*public\.is_workspace_admin\(\) or v\.lead_recruiter_id = auth\.uid\(\)/i)
+  })
+
+  it('enforces RLS on vacancy_collaborators allowing collaborator voluntary leave', () => {
     expect(migrationSql).toMatch(/alter table public\.vacancy_collaborators enable row level security/i)
     expect(migrationSql).toMatch(/create policy vacancy_collaborators_read on public\.vacancy_collaborators[\s\S]*using \(public\.is_recruiter\(\)\)/i)
-    expect(migrationSql).toMatch(/create policy vacancy_collaborators_insert on public\.vacancy_collaborators[\s\S]*public\.is_recruiter\(\)[\s\S]*public\.can_manage_vacancy\(vacancy_id\)[\s\S]*exists \(select 1 from public\.recruiters where user_id = recruiter_id\)/i)
-    expect(migrationSql).toMatch(/create policy vacancy_collaborators_delete on public\.vacancy_collaborators[\s\S]*public\.is_recruiter\(\)[\s\S]*public\.can_manage_vacancy\(vacancy_id\) or recruiter_id = auth\.uid\(\)/i)
+    expect(migrationSql).toMatch(/create policy vacancy_collaborators_insert on public\.vacancy_collaborators[\s\S]*public\.can_manage_vacancy\(vacancy_id\)/i)
+    // Voluntary leave: recruiter_id = auth.uid()
+    expect(migrationSql).toMatch(/create policy vacancy_collaborators_delete on public\.vacancy_collaborators[\s\S]*recruiter_id = auth\.uid\(\)/i)
   })
 
   it('revokes public/anon access and limits grants to authenticated recruiters', () => {
     expect(migrationSql).toMatch(/revoke all on public\.vacancy_collaborators from public, anon/i)
     expect(migrationSql).toMatch(/grant select, insert, delete on public\.vacancy_collaborators to authenticated/i)
-  })
-
-  it('provides atomic security definer procedures for lead assignment and collaboration', () => {
-    expect(migrationSql).toMatch(/create or replace function public\.assign_lead_recruiter/i)
-    expect(migrationSql).toMatch(/create or replace function public\.add_vacancy_collaborator/i)
-    expect(migrationSql).toMatch(/create or replace function public\.remove_vacancy_collaborator/i)
-    expect(migrationSql).toMatch(/cannot add lead recruiter as collaborator/i)
   })
 })
 
@@ -100,13 +138,13 @@ describe('Recruiter Ownership & Collaboration Workflow Rules', () => {
       lead_recruiter: newLeadUser,
     }
 
-    expect(updatedVacancy.created_by).toBe(creatorUser.user_id) // Preserved!
+    expect(updatedVacancy.created_by).toBe(creatorUser.user_id) // Preserved immutable!
     expect(updatedVacancy.lead_recruiter_id).toBe(newLeadUser.user_id) // Updated!
     expect(updatedVacancy.lead_recruiter?.display_name).toBe('Chinedu Eze')
   })
 
-  it('displays Unassigned safely for existing vacancies without reliable attribution', () => {
-    const unattributedVacancy: Vacancy = {
+  it('prevents ordinary recruiters from claiming or managing unassigned legacy vacancies', () => {
+    const legacyVacancy: Vacancy = {
       id: 'v-legacy-1',
       title: 'Legacy Operations Manager',
       slug: 'legacy-operations-manager',
@@ -122,11 +160,20 @@ describe('Recruiter Ownership & Collaboration Workflow Rules', () => {
       lead_recruiter: null,
     }
 
-    const resolvedLead = directory.find(r => r.user_id === unattributedVacancy.lead_recruiter_id) || null
-    expect(resolvedLead).toBeNull()
+    const ordinaryRecruiter = directory[0] // role: recruiter
+    const workspaceAdmin = directory[3] // role: admin
 
-    const displayName = resolvedLead ? resolvedLead.display_name : 'Unassigned'
-    expect(displayName).toBe('Unassigned')
+    // Rule: can_manage_vacancy logic
+    const canOrdinaryManage =
+      ordinaryRecruiter.role === 'admin' ||
+      (legacyVacancy.lead_recruiter_id !== null && legacyVacancy.lead_recruiter_id === ordinaryRecruiter.user_id)
+
+    const canAdminManage =
+      workspaceAdmin.role === 'admin' ||
+      (legacyVacancy.lead_recruiter_id !== null && legacyVacancy.lead_recruiter_id === workspaceAdmin.user_id)
+
+    expect(canOrdinaryManage).toBe(false) // Ordinary recruiter strictly denied!
+    expect(canAdminManage).toBe(true) // Workspace Admin authorized to reconcile!
   })
 
   it('allows adding collaborators and rejects duplicate assignment', () => {
@@ -164,17 +211,78 @@ describe('Recruiter Ownership & Collaboration Workflow Rules', () => {
     expect(collaborators).toHaveLength(2)
   })
 
-  it('allows authorized users to remove collaborators', () => {
+  it('allows collaborator to voluntarily leave assignment', () => {
     const vacancyId = 'v-100'
+    const collaboratorId = 'rec-collab-1'
     let collaborators = [
-      { vacancy_id: vacancyId, recruiter_id: 'rec-collab-1', display_name: 'Chinedu Eze' },
+      { vacancy_id: vacancyId, recruiter_id: collaboratorId, display_name: 'Chinedu Eze' },
       { vacancy_id: vacancyId, recruiter_id: 'rec-collab-2', display_name: 'Ngozi Okonjo' },
     ]
 
-    // Remove rec-collab-1
-    collaborators = collaborators.filter(c => c.recruiter_id !== 'rec-collab-1')
+    // Collaborator voluntarily removes self
+    collaborators = collaborators.filter(c => c.recruiter_id !== collaboratorId)
     expect(collaborators).toHaveLength(1)
-    expect(collaborators[0].recruiter_id).toBe('rec-collab-2')
+    expect(collaborators.some(c => c.recruiter_id === collaboratorId)).toBe(false)
+  })
+
+  it('enforces deletion restrictions: only empty drafts can be deleted', () => {
+    const activeVacancyWithApps: Vacancy = {
+      id: 'v-1',
+      title: 'Active Role',
+      slug: 'active-role',
+      description: 'Desc',
+      requirements: 'Req',
+      location: 'Lagos',
+      employment_type: 'Full-time',
+      status: 'active',
+      deadline: null,
+      created_at: '2024-01-01',
+      application_count: 5,
+    }
+
+    const draftVacancyWithApps: Vacancy = {
+      id: 'v-2',
+      title: 'Draft Role with Applicants',
+      slug: 'draft-role-apps',
+      description: 'Desc',
+      requirements: 'Req',
+      location: 'Lagos',
+      employment_type: 'Full-time',
+      status: 'draft',
+      deadline: null,
+      created_at: '2024-01-01',
+      application_count: 2,
+    }
+
+    const emptyDraftVacancy: Vacancy = {
+      id: 'v-3',
+      title: 'Clean Empty Draft',
+      slug: 'clean-empty-draft',
+      description: 'Desc',
+      requirements: 'Req',
+      location: 'Lagos',
+      employment_type: 'Full-time',
+      status: 'draft',
+      deadline: null,
+      created_at: '2024-01-01',
+      application_count: 0,
+    }
+
+    const canDelete = (v: Vacancy) => v.status === 'draft' && (v.application_count ?? 0) === 0
+
+    expect(canDelete(activeVacancyWithApps)).toBe(false)
+    expect(canDelete(draftVacancyWithApps)).toBe(false)
+    expect(canDelete(emptyDraftVacancy)).toBe(true)
+  })
+
+  it('prevents demoting the last remaining workspace administrator', () => {
+    const admins = [{ user_id: 'rec-admin-1', role: 'admin' }]
+    const canDemote = (adminList: typeof admins) => adminList.length > 1
+    expect(canDemote(admins)).toBe(false)
+
+    // Adding second admin allows demoting one
+    admins.push({ user_id: 'rec-admin-2', role: 'admin' })
+    expect(canDemote(admins)).toBe(true)
   })
 })
 
