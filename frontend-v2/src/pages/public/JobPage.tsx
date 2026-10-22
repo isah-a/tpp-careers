@@ -43,7 +43,44 @@ export function JobPage() {
 
   // Form states
   const [file, setFile] = useState<File | null>(null)
+  const [fileError, setFileError] = useState<string | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const [answers, setAnswers] = useState<Record<string, string>>({})
+
+  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const selected = e.target.files?.[0]
+    if (!selected) {
+      setFile(null)
+      setFileError(null)
+      return
+    }
+
+    const cvErr = validateCv(selected)
+    if (cvErr) {
+      setFile(null)
+      setFileError(cvErr)
+      if (fileInputRef.current) {
+        fileInputRef.current.value = ''
+      }
+      return
+    }
+
+    setFile(selected)
+    setFileError(null)
+    if (error && (error.includes('CV') || error.includes('resume') || error.includes('file') || error.includes('attach'))) {
+      setError(null)
+    }
+  }
+
+  function handleRemoveFile(e: React.MouseEvent) {
+    e.preventDefault()
+    e.stopPropagation()
+    setFile(null)
+    setFileError(null)
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
+  }
 
   useEffect(() => {
     let isMounted = true
@@ -104,6 +141,13 @@ export function JobPage() {
     e.preventDefault()
     setError(null)
 
+    if (!file || fileError) {
+      const cvErr = fileError || validateCv(file || undefined) || 'Please attach your CV'
+      setFileError(cvErr)
+      setError(cvErr)
+      return
+    }
+
     if (!siteKey) {
       setError('Security verification is unavailable. Please contact the recruitment team.')
       return
@@ -127,8 +171,9 @@ export function JobPage() {
       return
     }
 
-    const cvError = validateCv(file || undefined)
+    const cvError = validateCv(file)
     if (cvError) {
+      setFileError(cvError)
       setError(cvError)
       return
     }
@@ -142,6 +187,7 @@ export function JobPage() {
     setSubmitting(true)
 
     try {
+      formData.set('cv', file)
       formData.set('answers', JSON.stringify(answers))
       formData.set('vacancy_slug', slug || '')
       setTurnstileToken(formData, verificationToken)
@@ -361,24 +407,77 @@ export function JobPage() {
                 <label className="block text-xs font-medium text-gray-700 mb-1">
                   Resume / CV (PDF or DOCX, max 5MB) *
                 </label>
-                <label className="flex items-center gap-3 p-3.5 rounded-xl border border-dashed border-gray-300 hover:border-[#5C00DD] bg-gray-50/50 cursor-pointer transition-colors">
-                  <div className="w-9 h-9 rounded-lg bg-white border border-gray-200 flex items-center justify-center text-[#5C00DD] shrink-0">
-                    <UploadCloud size={18} />
+                <label
+                  htmlFor="cv-upload-input"
+                  className={`flex items-center gap-3 p-3.5 rounded-xl border border-dashed cursor-pointer transition-colors ${
+                    fileError
+                      ? 'border-red-300 bg-red-50/50 hover:border-red-400'
+                      : file
+                        ? 'border-emerald-300 bg-emerald-50/30 hover:border-emerald-400'
+                        : 'border-gray-300 hover:border-[#5C00DD] bg-gray-50/50'
+                  }`}
+                >
+                  <div
+                    className={`w-9 h-9 rounded-lg border flex items-center justify-center shrink-0 ${
+                      fileError
+                        ? 'bg-red-100/70 border-red-200 text-red-600'
+                        : file
+                          ? 'bg-emerald-100/70 border-emerald-200 text-emerald-600'
+                          : 'bg-white border-gray-200 text-[#5C00DD]'
+                    }`}
+                  >
+                    {fileError ? (
+                      <AlertCircle size={18} />
+                    ) : file ? (
+                      <CheckCircle2 size={18} />
+                    ) : (
+                      <UploadCloud size={18} />
+                    )}
                   </div>
                   <div className="min-w-0 flex-1">
-                    <span className="block text-xs font-medium text-gray-800 truncate">
-                      {file ? file.name : 'Choose a file to upload'}
+                    <span
+                      className={`block text-xs font-semibold truncate ${
+                        fileError ? 'text-red-700' : file ? 'text-gray-900' : 'text-gray-800'
+                      }`}
+                    >
+                      {file ? file.name : fileError ? 'Invalid file selected' : 'Choose a file to upload'}
                     </span>
-                    <span className="block text-[11px] text-gray-400">PDF, DOCX up to 5MB</span>
+                    <span className="block text-[11px] text-gray-500 mt-0.5">
+                      {file
+                        ? `${(file.size / (1024 * 1024)).toFixed(2)} MB • Click to replace`
+                        : 'PDF, DOCX up to 5MB'}
+                    </span>
                   </div>
+                  {file && (
+                    <button
+                      type="button"
+                      onClick={handleRemoveFile}
+                      aria-label="Remove attached CV"
+                      className="text-xs text-gray-400 hover:text-red-600 px-2 py-1 rounded-md hover:bg-gray-100 transition-colors"
+                    >
+                      Remove
+                    </button>
+                  )}
                   <input
+                    ref={fileInputRef}
+                    id="cv-upload-input"
                     type="file"
                     name="cv"
-                    accept=".pdf,.docx"
+                    accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                     className="sr-only"
-                    onChange={e => setFile(e.target.files?.[0] || null)}
+                    onChange={handleFileChange}
                   />
                 </label>
+                {fileError && (
+                  <p
+                    role="alert"
+                    id="cv-upload-error"
+                    className="mt-1.5 text-xs text-red-600 flex items-center gap-1.5 font-medium"
+                  >
+                    <AlertCircle size={14} className="shrink-0 text-red-500" />
+                    <span>{fileError}</span>
+                  </p>
+                )}
               </div>
 
               {/* Custom Screening Questions */}
@@ -487,15 +586,26 @@ export function JobPage() {
               {/* Submit Button */}
               <button
                 type="submit"
-                disabled={submitting || !siteKey || verificationStatus !== 'verified' || !verificationToken}
+                disabled={
+                  submitting ||
+                  !siteKey ||
+                  verificationStatus !== 'verified' ||
+                  !verificationToken ||
+                  !file ||
+                  Boolean(fileError)
+                }
                 className="w-full py-3 px-4 rounded-xl bg-[#16A34A] hover:bg-[#15803D] text-white text-sm font-semibold shadow-xs flex items-center justify-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer mt-2"
               >
                 <span>
                   {submitting
                     ? 'Submitting Application...'
-                    : verificationStatus !== 'verified'
-                      ? 'Complete verification to submit'
-                      : 'Submit Application'}
+                    : !file
+                      ? 'Attach CV to continue'
+                      : fileError
+                        ? 'Valid CV required to submit'
+                        : verificationStatus !== 'verified'
+                          ? 'Complete verification to submit'
+                          : 'Submit Application'}
                 </span>
                 {!submitting && <CheckCircle2 size={16} />}
               </button>

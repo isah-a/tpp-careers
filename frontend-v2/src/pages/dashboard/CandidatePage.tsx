@@ -28,6 +28,7 @@ import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../context/AuthContext'
 import { ScheduleInterviewModal } from '../../components/dashboard/ScheduleInterviewModal'
 import { CancelInterviewModal } from '../../components/dashboard/CancelInterviewModal'
+import { PdfResumeViewer } from '../../components/candidate/PdfResumeViewer'
 import type { Application, ApplicationNote, ApplicationReview, ApplicationStage, ScreeningQuestion, Interview, InterviewHistory } from '../../types'
 
 interface CandidateDetail extends Omit<Application, 'vacancies'> {
@@ -214,6 +215,7 @@ export function CandidatePage() {
       setNotes(FIGMA_NOTES_FIXTURE)
       setMyRating(4)
       setSiblingIds(['figma-1', 'figma-2', 'figma-3'])
+      setCvSignedUrl('/sample-multipage.pdf')
       setLoading(false)
       return
     }
@@ -1150,14 +1152,11 @@ export function CandidatePage() {
                       </button>
                     </div>
                   ) : cvSignedUrl ? (
-                    /* PDF Document Viewer */
-                    <div className="flex-1 min-h-[620px] rounded-xl overflow-hidden border border-gray-200 bg-[#323639] shadow-inner">
-                      <iframe
-                        src={cvSignedUrl}
-                        title="Candidate Resume Preview"
-                        className="w-full h-full min-h-[620px] border-0"
-                      />
-                    </div>
+                    <PdfResumeViewer
+                      url={cvSignedUrl}
+                      candidateName={candidate.full_name}
+                      onDownload={() => void handleDownloadCv()}
+                    />
                   ) : (
                     <div className="flex-1 min-h-[500px] rounded-xl border border-dashed border-gray-200 bg-gray-50 flex flex-col items-center justify-center p-8 text-center">
                       <CircleAlert size={32} className="text-amber-500 mb-2" />

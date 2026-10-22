@@ -56,11 +56,17 @@ export function validateAnswers(questions: ScreeningQuestion[], answers: Record<
 export function validateCv(file?: File): string | null {
   if (!file) return 'Please attach your CV'
   if (file.size > 5 * 1024 * 1024) return 'CV must be 5 MB or smaller'
-  const valid = [
+  if (file.size === 0) return 'The selected file is empty'
+  const validMimes = [
     'application/pdf',
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
   ]
-  return valid.includes(file.type) ? null : 'Only PDF and DOCX files are accepted'
+  const name = (file.name || '').toLowerCase()
+  const validExt = name.endsWith('.pdf') || name.endsWith('.docx')
+  if (!validMimes.includes(file.type) && !validExt) {
+    return 'Only PDF and DOCX files are accepted'
+  }
+  return null
 }
 
 export const interviewScheduleSchema = z.object({
