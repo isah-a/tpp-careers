@@ -157,7 +157,7 @@ export const TurnstileWidget = forwardRef<TurnstileWidgetHandle, Props>(function
       {loadFailed && (
         <button
           type="button"
-          className="mt-2 text-label-sm text-primary font-bold underline cursor-pointer"
+          className="mt-2 text-xs font-semibold text-[#5C00DD] hover:underline cursor-pointer"
           onClick={() => setAttempt(value => value + 1)}
         >
           Retry verification

@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
   ArrowLeft,
@@ -15,17 +15,31 @@ import { applicationBaseSchema, validateAnswers, validateCv } from '../../lib/va
 import { parseSubmissionError } from '../../lib/submissionError'
 import { formatCompensation } from '../../lib/recruitment'
 import { sanitizeHtml } from '../../lib/sanitize'
+import {
+  TurnstileWidget,
+  setTurnstileToken,
+  type TurnstileStatus,
+  type TurnstileWidgetHandle,
+} from '../../components/shared/TurnstileWidget'
 import type { Vacancy, ScreeningQuestion } from '../../types'
 
 export function JobPage() {
   const { slug } = useParams()
   const navigate = useNavigate()
+  const widget = useRef<TurnstileWidgetHandle>(null)
+  const siteKey = import.meta.env.VITE_TURNSTILE_SITE_KEY as string | undefined
 
   const [job, setJob] = useState<Vacancy | null>(null)
   const [questions, setQuestions] = useState<ScreeningQuestion[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+
+  // Verification states
+  const [verificationToken, setVerificationToken] = useState<string | null>(null)
+  const [verificationStatus, setVerificationStatus] = useState<TurnstileStatus>(
+    siteKey ? 'loading' : 'error'
+  )
 
   // Form states
   const [file, setFile] = useState<File | null>(null)
@@ -90,6 +104,16 @@ export function JobPage() {
     e.preventDefault()
     setError(null)
 
+    if (!siteKey) {
+      setError('Security verification is unavailable. Please contact the recruitment team.')
+      return
+    }
+
+    if (!verificationToken || verificationStatus !== 'verified') {
+      setError('Please complete the security verification before submitting.')
+      return
+    }
+
     const formData = new FormData(e.currentTarget)
     const parsed = applicationBaseSchema.safeParse({
       full_name: formData.get('full_name'),
@@ -120,6 +144,7 @@ export function JobPage() {
     try {
       formData.set('answers', JSON.stringify(answers))
       formData.set('vacancy_slug', slug || '')
+      setTurnstileToken(formData, verificationToken)
 
       const { error: fnError } = await supabase.functions.invoke('submit-application', {
         body: formData,
@@ -129,6 +154,7 @@ export function JobPage() {
         const parsedErr = await parseSubmissionError(fnError)
         setError(parsedErr)
         setSubmitting(false)
+        widget.current?.reset()
         return
       }
 
@@ -136,6 +162,7 @@ export function JobPage() {
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Submission failed')
       setSubmitting(false)
+      widget.current?.reset()
     }
   }
 
@@ -166,6 +193,18 @@ export function JobPage() {
       </div>
     )
   }
+
+  const verificationMessage = !siteKey
+    ? 'Security verification is unavailable. Please contact the recruitment team.'
+    : verificationStatus === 'expired'
+      ? 'Security verification expired. Please complete it again.'
+      : verificationStatus === 'error'
+        ? 'Security verification could not be loaded. Please click "Retry verification" or refresh the page.'
+        : verificationStatus === 'loading'
+          ? 'Loading security verification...'
+          : verificationStatus === 'pending'
+            ? 'Please complete the security verification.'
+            : ''
 
   return (
     <div className="w-full min-h-screen bg-[#F9FAFB] py-10 px-4 sm:px-6 lg:px-8">
@@ -389,6 +428,51 @@ export function JobPage() {
                 <span>I agree to the processing of my application data for this recruitment process. *</span>
               </label>
 
+              {/* AI Review Consent (Optional) */}
+              <label className="flex items-start gap-2.5 text-xs text-gray-600 cursor-pointer p-3 rounded-xl border border-gray-100 bg-gray-50/50">
+                <input
+                  type="checkbox"
+                  name="ai_review_consent"
+                  className="mt-0.5 rounded text-[#5C00DD] focus:ring-[#5C00DD]"
+                />
+                <span>
+                  <strong className="block text-gray-800 font-medium">AI-assisted review consent (optional)</strong>
+                  <span className="block text-[11px] text-gray-500 mt-0.5 leading-relaxed">
+                    AI tools may organise or summarise application information. Human recruiters remain responsible for decisions, declining does not affect your eligibility, and this does not include AI model training.
+                  </span>
+                </span>
+              </label>
+
+              {/* Cloudflare Turnstile Bot Verification */}
+              {siteKey ? (
+                <div className="pt-2">
+                  <TurnstileWidget
+                    ref={widget}
+                    siteKey={siteKey}
+                    onToken={setVerificationToken}
+                    onStatus={setVerificationStatus}
+                  />
+                  {verificationMessage && (
+                    <p
+                      className={`text-xs mt-1.5 ${
+                        verificationStatus === 'error' || verificationStatus === 'expired'
+                          ? 'text-amber-700 font-medium'
+                          : 'text-gray-500'
+                      }`}
+                    >
+                      {verificationMessage}
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <div
+                  role="alert"
+                  className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-800"
+                >
+                  Security verification is currently unavailable. Please contact the recruitment team.
+                </div>
+              )}
+
               {/* Error Message */}
               {error && (
                 <div
@@ -403,10 +487,16 @@ export function JobPage() {
               {/* Submit Button */}
               <button
                 type="submit"
-                disabled={submitting}
-                className="w-full py-3 px-4 rounded-xl bg-[#16A34A] hover:bg-[#15803D] text-white text-sm font-semibold shadow-xs flex items-center justify-center gap-2 transition-colors disabled:opacity-50 cursor-pointer mt-2"
+                disabled={submitting || !siteKey || verificationStatus !== 'verified' || !verificationToken}
+                className="w-full py-3 px-4 rounded-xl bg-[#16A34A] hover:bg-[#15803D] text-white text-sm font-semibold shadow-xs flex items-center justify-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer mt-2"
               >
-                <span>{submitting ? 'Submitting Application...' : 'Submit Application'}</span>
+                <span>
+                  {submitting
+                    ? 'Submitting Application...'
+                    : verificationStatus !== 'verified'
+                      ? 'Complete verification to submit'
+                      : 'Submit Application'}
+                </span>
                 {!submitting && <CheckCircle2 size={16} />}
               </button>
             </form>

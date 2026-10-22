@@ -235,4 +235,7 @@ export async function handler(req: Request) {
   return json({ success: true }, 201, origin)
 }
 
-if (import.meta.main) Deno.serve(handler)
+if (import.meta.main) {
+  const port = Number(Deno.env.get('PORT') || 8081)
+  Deno.serve({ port }, handler)
+}
