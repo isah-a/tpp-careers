@@ -52,7 +52,7 @@ export function RecruiterSidebar({ onNavClick }: RecruiterSidebarProps) {
                 end={item.end}
                 onClick={onNavClick}
                 className={({ isActive }) =>
-                  `flex items-center gap-3.5 px-4.5 py-3.5 rounded-xl text-[15px] transition-colors ${
+                  `flex items-center gap-3.5 px-[18px] py-3.5 rounded-xl text-[15px] transition-colors ${
                     isActive
                       ? 'bg-[#F3EBFD] text-[#5C00DD] font-semibold'
                       : 'text-[#4B5563] hover:text-gray-900 hover:bg-gray-50/80 font-medium'
