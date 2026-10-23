@@ -624,6 +624,20 @@ export function CandidatesPage() {
     }
   }
 
+  // Build candidate profile URL preserving vacancy query params
+  const getCandidateProfileUrl = (candidateId: string) => {
+    return `/dashboard/candidates/${candidateId}${vacancyId ? `?job_id=${vacancyId}` : ''}${isFixtureRequested ? (vacancyId ? '&fixture=true' : '?fixture=true') : ''}`
+  }
+
+  // Row navigation to Candidate Profile
+  const handleRowClick = (e: React.MouseEvent<HTMLTableRowElement>, candidateId: string) => {
+    const target = e.target as HTMLElement
+    if (target.closest('a, button, input, select, textarea, [data-interactive="true"]')) {
+      return
+    }
+    navigate(getCandidateProfileUrl(candidateId))
+  }
+
   // Render Status Badge Pill exactly matching Figma Jobs(2).png
   const renderStatusBadge = (stage: ApplicationStage | string, appId: string) => {
     let badgeClass = ''
@@ -946,16 +960,26 @@ export function CandidatesPage() {
                   return (
                     <tr
                       key={row.id}
-                      className={`hover:bg-gray-50/50 transition-colors ${
+                      onClick={e => handleRowClick(e, row.id)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') {
+                          const target = e.target as HTMLElement
+                          if (target === e.currentTarget) {
+                            navigate(getCandidateProfileUrl(row.id))
+                          }
+                        }
+                      }}
+                      className={`hover:bg-gray-50/50 transition-colors cursor-pointer ${
                         isChecked ? 'bg-[#F3EBFD]/20' : ''
                       }`}
                     >
                       {/* Checkbox */}
-                      <td className="px-6 py-4.5">
+                      <td className="px-6 py-4.5" onClick={e => e.stopPropagation()}>
                         <input
                           type="checkbox"
                           checked={isChecked}
                           onChange={() => handleToggleSelectRow(row.id)}
+                          onClick={e => e.stopPropagation()}
                           aria-label={`Select ${row.full_name}`}
                           className="rounded border-gray-300 text-[#5C00DD] focus:ring-[#5C00DD] cursor-pointer"
                         />
@@ -964,7 +988,7 @@ export function CandidatesPage() {
                       {/* Applicant Name */}
                       <td className="px-6 py-4.5 font-medium text-gray-900">
                         <Link
-                          to={`/dashboard/candidates/${row.id}${vacancyId ? `?job_id=${vacancyId}` : ''}${isFixtureRequested ? (vacancyId ? '&fixture=true' : '?fixture=true') : ''}`}
+                          to={getCandidateProfileUrl(row.id)}
                           className="hover:text-[#5C00DD] transition-colors"
                         >
                           {row.full_name}
@@ -982,10 +1006,11 @@ export function CandidatesPage() {
                       </td>
 
                       {/* Recruiter-Specific 5-Star Rating */}
-                      <td className="px-6 py-4.5">
+                      <td className="px-6 py-4.5" onClick={e => e.stopPropagation()}>
                         <div
                           className="inline-flex items-center gap-1"
                           title={`Your recruiter rating: ${currentRating} of 5 stars`}
+                          onClick={e => e.stopPropagation()}
                         >
                           {[1, 2, 3, 4, 5].map(starNum => {
                             const isFilled = starNum <= currentRating
@@ -993,7 +1018,10 @@ export function CandidatesPage() {
                               <button
                                 key={starNum}
                                 type="button"
-                                onClick={() => void handleRate(row.id, starNum)}
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  void handleRate(row.id, starNum)
+                                }}
                                 disabled={ratingUpdatingId === row.id}
                                 className="p-0.5 cursor-pointer text-amber-400 hover:scale-115 transition-transform disabled:opacity-50"
                                 aria-label={`Rate ${starNum} stars`}
@@ -1014,15 +1042,18 @@ export function CandidatesPage() {
                       </td>
 
                       {/* Status / Stage Badge with Transition Dropdown Trigger */}
-                      <td className="px-6 py-4.5">
+                      <td className="px-6 py-4.5" onClick={e => e.stopPropagation()}>
                         {renderStatusBadge(row.stage, row.id)}
                       </td>
 
                       {/* Resume Download Action */}
-                      <td className="px-6 py-4.5">
+                      <td className="px-6 py-4.5" onClick={e => e.stopPropagation()}>
                         <button
                           type="button"
-                          onClick={() => void handleDownloadCv(row.cv_path, row.full_name)}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            void handleDownloadCv(row.cv_path, row.full_name)
+                          }}
                           className="text-[#5C00DD] font-medium hover:underline cursor-pointer transition-colors"
                         >
                           Download
